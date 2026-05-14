@@ -642,6 +642,16 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         )
         self.expert_location_updater = ExpertLocationUpdater()
 
+        # LPLB (moe_load_balancer-backed): per-layer runtimes consume
+        # post-AR global logical counts and drive the LP solve via the SDK.
+        # Constructed once after the initial ExpertLocationMetadata is
+        # available; re-init runs after every EPLB rebalance.
+        if (
+            self.server_args.ep_dispatch_algorithm == "lp"
+            and not self.is_draft_worker
+        ):
+            self._init_lplb_runtimes()
+
         (
             ElasticEPStateManager.init(self.server_args)
             if self.server_args.elastic_ep_backend
@@ -1624,6 +1634,60 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             log_info_on_rank0(
                 logger, f"Prepared {num_prepared} DeepEP waterfill TopK modules."
             )
+    def _init_lplb_runtimes(self):
+        """Build one LPLBRuntime per MoE layer and register it globally.
+
+        The runtime wraps the moe_load_balancer SDK's framework-neutral
+        LPLBL2Router and the SGLang-backed LPLBKernels delegating to
+        ``sglang.jit_kernel.lplb.cuda_solver``. Each runtime owns a
+        SGLangPlacementAdapter that aliases the live
+        ``ExpertLocationMetadata`` tensors; the adapter's
+        ``placement_version`` is bumped by ``update_expert_location`` so
+        the router rebuilds its per-layer LP matrices after EPLB
+        rebalances without us having to reconstruct the runtime.
+        """
+        from sglang.srt.distributed import get_moe_ep_group
+
+        from moe_load_balancer.adapters.sglang import SGLangPlacementAdapter
+        from moe_load_balancer.adapters.sglang.lplb import LPLBRuntime
+        from sglang.srt.eplb.moelb_lplb_registry import (
+            clear_global_lplb_runtimes,
+            set_global_lplb_runtime,
+        )
+
+        metadata = get_global_expert_location_metadata()
+        if metadata is None:
+            return
+
+        # The placement adapter is shared across layers — one snapshot per
+        # call returns the layer the runtime requested. Re-using one
+        # adapter keeps ``placement_version`` consistent.
+        self._lplb_placement_adapter = SGLangPlacementAdapter(metadata)
+
+        clear_global_lplb_runtimes()
+        ep_group = get_moe_ep_group()
+
+        architectures = getattr(self.model_config.hf_config, "architectures", None)
+        model_arch = architectures[0] if architectures else None
+
+        for lid in range(metadata.num_layers):
+            runtime = LPLBRuntime(
+                layer_id=lid,
+                ep_group=ep_group,
+                num_logical_experts=metadata.num_logical_experts,
+                num_physical_experts=metadata.num_physical_experts,
+                num_gpus=metadata.ep_size,
+                placement_provider=self._lplb_placement_adapter,
+                model_architecture=model_arch,
+            )
+            set_global_lplb_runtime(lid, runtime)
+
+        logger.info(
+            f"Initialized {metadata.num_layers} LPLB runtimes "
+            f"(num_logical={metadata.num_logical_experts}, "
+            f"num_physical={metadata.num_physical_experts}, "
+            f"ep_size={metadata.ep_size})."
+        )
 
     def update_expert_location(
         self,
@@ -1667,6 +1731,16 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                     weight_name_filter=weight_name_filter,
                 )
 
+        # LPLB: notify the placement adapter that EPLB just rebalanced. The
+        # adapter bumps its ``placement_version`` counter so each runtime's
+        # router rebuilds the per-layer LP matrices on the next route call.
+        # We do not reconstruct the LPLBRuntime objects themselves — the
+        # adapter aliases live metadata tensors, so the rebuild is implicit.
+        if (
+            self.server_args.ep_dispatch_algorithm == "lp"
+            and getattr(self, "_lplb_placement_adapter", None) is not None
+        ):
+            self._lplb_placement_adapter.bump_version()
     def maybe_recover_ep_ranks(self):
         # TODO(perf): `active_ranks.all()` on a CUDA tensor triggers host-device
         # synchronization, and this function is on the forward-path.
