@@ -1244,11 +1244,16 @@ def _post_process_topk_ids_via_lplb_runtime(
         routed_weights = topk_weights
 
     # The runtime's `route` returns a SGLang `StandardTopKOutput`; reuse our
-    # router_logits since LPLB doesn't change gating logits.
+    # router_logits since LPLB doesn't change gating logits. Threading
+    # ``num_token_non_padded`` so the runtime's local-count step excludes
+    # padded rows — otherwise the LP global counts are skewed by stale
+    # logical ids in the padding region of ``topk_ids``.
     routed_output = StandardTopKOutput(
         topk_weights=routed_weights, topk_ids=routed_cols, router_logits=router_logits
     )
-    materialized = runtime.route(routed_output)
+    materialized = runtime.route(
+        routed_output, num_token_non_padded=num_token_non_padded
+    )
     routed_cols = materialized.topk_ids
 
     if shared_cols is not None:
