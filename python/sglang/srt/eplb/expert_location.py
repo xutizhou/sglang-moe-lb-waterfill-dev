@@ -144,46 +144,17 @@ class ExpertLocationMetadata:
     def init_by_eplb(
         server_args: ServerArgs, model_config: ModelConfig, logical_count: torch.Tensor
     ):
-        if not isinstance(logical_count, torch.Tensor):
-            logical_count = torch.tensor(logical_count)
-        if len(logical_count.shape) == 2:
-            logical_count = logical_count.unsqueeze(0)
-        logical_count = logical_count.to(server_args.device)
+        # Delegate to the framework-neutral planner in moe_load_balancer. The
+        # adapter is the analogue of WaterfillRuntime for L1: SGLang glue
+        # stays a single import + single call, the algorithm and abstraction
+        # live outside the repo. Equivalence with the prior inline path is
+        # guaranteed because the planner vendors the same DeepSeek EPLB
+        # algorithm code and the adapter calls back into
+        # ``ExpertLocationMetadata._init_raw`` for sglang-specific writeback.
+        from moe_load_balancer.adapters.sglang.eplb import SGLangEPLBRuntime
 
-        common = ExpertLocationMetadata._init_common(server_args, model_config)
-
-        if common is None:
-            return None
-
-        model_config_for_expert_location = common["model_config_for_expert_location"]
-        num_physical_experts = common["num_physical_experts"]
-        num_groups = model_config_for_expert_location.num_groups
-        num_nodes = server_args.nnodes
-
-        from sglang.srt.eplb import eplb_algorithms
-
-        physical_to_logical_map, logical_to_all_physical_map, expert_count = (
-            eplb_algorithms.rebalance_experts(
-                tokens_per_expert=logical_count,
-                num_physical_experts=num_physical_experts,
-                num_local_physical_experts=num_physical_experts // common["ep_size"],
-                num_groups=num_groups,
-                num_nodes=num_nodes,
-                algorithm=eplb_algorithms.compute_algorithm(
-                    raw_algorithm=server_args.eplb_algorithm,
-                    num_groups=num_groups,
-                    num_nodes=num_nodes,
-                ),
-            )
-        )
-
-        return ExpertLocationMetadata._init_raw(
-            server_args=server_args,
-            ep_size=common["ep_size"],
-            physical_to_logical_map=physical_to_logical_map.to(server_args.device),
-            logical_to_all_physical_map=logical_to_all_physical_map.to(
-                server_args.device
-            ),
+        return SGLangEPLBRuntime().init_by_eplb(
+            server_args, model_config, logical_count
         )
 
     @staticmethod
