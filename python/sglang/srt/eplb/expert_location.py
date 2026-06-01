@@ -144,17 +144,45 @@ class ExpertLocationMetadata:
     def init_by_eplb(
         server_args: ServerArgs, model_config: ModelConfig, logical_count: torch.Tensor
     ):
-        # Delegate to the framework-neutral planner in moe_load_balancer. The
-        # adapter is the analogue of WaterfillRuntime for L1: SGLang glue
-        # stays a single import + single call, the algorithm and abstraction
-        # live outside the repo. Equivalence with the prior inline path is
-        # guaranteed because the planner vendors the same DeepSeek EPLB
-        # algorithm code and the adapter calls back into
-        # ``ExpertLocationMetadata._init_raw`` for sglang-specific writeback.
-        from moe_load_balancer.adapters.sglang.eplb import SGLangEPLBRuntime
+        # Plain-data wrapper around moe_load_balancer's framework-neutral
+        # ``SGLangEPLBRuntime.compute_placement``. This static method does
+        # all sglang-shape work (server_args / model_config / ELM
+        # extraction + writeback); MLB only sees plain scalars + tensors.
+        from moe_load_balancer.adapters.sglang.eplb import get_default_runtime
 
-        return SGLangEPLBRuntime().init_by_eplb(
-            server_args, model_config, logical_count
+        if not isinstance(logical_count, torch.Tensor):
+            logical_count = torch.tensor(logical_count)
+        if len(logical_count.shape) == 2:
+            logical_count = logical_count.unsqueeze(0)
+        logical_count = logical_count.to(server_args.device)
+
+        common = ExpertLocationMetadata._init_common(server_args, model_config)
+        if common is None:
+            return None
+
+        plan = get_default_runtime().compute_placement(
+            logical_count=logical_count,
+            num_physical_experts=common["num_physical_experts"],
+            num_local_physical_experts=(
+                common["num_physical_experts"] // common["ep_size"]
+            ),
+            num_groups=common["model_config_for_expert_location"].num_groups,
+            num_nodes=server_args.nnodes,
+            algorithm=server_args.eplb_algorithm,
+            active_ranks=_mlb_eplb_active_ranks(server_args),
+        )
+        if plan is None:
+            return None
+
+        return ExpertLocationMetadata._init_raw(
+            server_args=server_args,
+            ep_size=common["ep_size"],
+            physical_to_logical_map=plan["physical_to_logical_map"].to(
+                server_args.device
+            ),
+            logical_to_all_physical_map=plan["logical_to_all_physical_map"].to(
+                server_args.device
+            ),
         )
 
     @staticmethod
@@ -591,3 +619,22 @@ def compute_initial_expert_location_metadata(
         raise NotImplementedError(
             f"Unknown init_expert_location format ({list(data_dict.keys())=})"
         )
+
+
+
+def _mlb_eplb_active_ranks(server_args):
+    """Pull active_ranks from ElasticEPStateManager, used by the
+    elasticity_aware EPLB algorithm variants. Moved here from
+    moe_load_balancer so MLB's runtime stays sglang-import-free
+    (Phase 1.5 inversion)."""
+    algorithm = getattr(server_args, "eplb_algorithm", "auto")
+    if not str(algorithm).startswith("elasticity_aware"):
+        return None
+    try:
+        from sglang.srt.elastic_ep.elastic_ep import ElasticEPStateManager
+    except ImportError:
+        return None
+    instance = ElasticEPStateManager.instance()
+    if instance is not None:
+        return instance.active_ranks
+    return ElasticEPStateManager.healthy_rank_state()

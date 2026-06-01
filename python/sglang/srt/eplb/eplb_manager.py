@@ -61,20 +61,61 @@ class EPLBManager:
             torch.get_device_module().synchronize()
             time_start = time.time()
 
-        dump_record_output = get_global_expert_distribution_recorder().dump_record(
-            output_mode="object"
-        )
-        logical_count = dump_record_output["logical_count"]
-        average_utilization_rate_over_window = dump_record_output[
-            "average_utilization_rate_over_window"
-        ]
+        # Phase 1.5: drain MLB recorder directly -- no round-trip through
+        # sglang's _StatAccumulator.dump dict shape. MLB still owns the
+        # buffer and the physical-to-logical conversion; sglang owns the
+        # cross-EP-rank all_reduce and the writeback.
+        from moe_load_balancer.adapters.sglang.eplb import get_default_runtime
 
-        # Check whether rebalancing is needed
-        if not self._check_rebalance_needed(average_utilization_rate_over_window):
+        mlb_runtime = get_default_runtime()
+        drained = mlb_runtime.drain_stats()
+        if drained is None:
+            logger.info("[EPLBManager] rebalance skipped: no stats observed yet")
             return
 
-        expert_location_metadata = ExpertLocationMetadata.init_by_eplb(
-            self._server_args, self._model_runner.model_config, logical_count
+        # Check whether rebalancing is needed (utilization-rate skip gate
+        # remains in sglang for Phase 1.5; the value comes from sglang's
+        # _UtilizationRateAccumulatorMixin via MLB's stats dict).
+        if not self._check_rebalance_needed(drained["average_utilization_rate"]):
+            return
+
+        # Cross-rank reduction (distributed comm is rightly sglang's job).
+        logical_count = drained["logical_count"]
+        torch.distributed.all_reduce(logical_count, op=torch.distributed.ReduceOp.SUM)
+
+        # Compute new placement (MLB) + sglang-shape writeback.
+        from sglang.srt.eplb.expert_location import (
+            ExpertLocationMetadata as _ELM,
+            _mlb_eplb_active_ranks,
+        )
+
+        common = _ELM._init_common(self._server_args, self._model_runner.model_config)
+        if common is None:
+            return
+
+        plan = mlb_runtime.compute_placement(
+            logical_count=logical_count,
+            num_physical_experts=common["num_physical_experts"],
+            num_local_physical_experts=(
+                common["num_physical_experts"] // common["ep_size"]
+            ),
+            num_groups=common["model_config_for_expert_location"].num_groups,
+            num_nodes=self._server_args.nnodes,
+            algorithm=self._server_args.eplb_algorithm,
+            active_ranks=_mlb_eplb_active_ranks(self._server_args),
+        )
+        if plan is None:
+            return
+
+        expert_location_metadata = _ELM._init_raw(
+            server_args=self._server_args,
+            ep_size=common["ep_size"],
+            physical_to_logical_map=plan["physical_to_logical_map"].to(
+                self._server_args.device
+            ),
+            logical_to_all_physical_map=plan["logical_to_all_physical_map"].to(
+                self._server_args.device
+            ),
         )
 
         update_layer_ids_chunks = self._compute_update_layer_ids_chunks()
