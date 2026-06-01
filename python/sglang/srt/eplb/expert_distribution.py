@@ -285,15 +285,22 @@ class _ExpertDistributionRecorderReal(ExpertDistributionRecorder):
         return self._recording
 
     def get_average_utilization_rate(self):
-        """Pull the windowed utilization rate from the accumulator, if
-        the mixin computed one. None on threshold=1.0 short-circuit."""
+        """Return the windowed utilization rate, or None if the
+        accumulator does not track it.
+
+        We do NOT swallow exceptions from
+        ``_get_global_average_utilization_rate``: that method runs a
+        ``torch.distributed.broadcast`` across EP ranks under NCCL.
+        If a single rank aborted that collective with an exception
+        while peers were still waiting, swallowing it locally would
+        leave the peers hanging until watchdog timeout. Symmetric
+        propagation (raise on all ranks, or none) is the only safe
+        choice.
+        """
         acc = self._accumulator
         if acc is None or not hasattr(acc, "_get_global_average_utilization_rate"):
             return None
-        try:
-            return acc._get_global_average_utilization_rate()
-        except Exception:
-            return None
+        return acc._get_global_average_utilization_rate()
 
 
 _global_expert_distribution_recorder: Optional[ExpertDistributionRecorder] = (
@@ -863,19 +870,23 @@ class _StatAccumulator(_UtilizationRateAccumulatorMixin):
         # SGLangStatsBridge. The buffer + physical->logical conversion now
         # live in MLB; the utilization-rate metric path
         # (_UtilizationRateAccumulatorMixin) stays in sglang.
+        # Use ensure_default_runtime so cold-start order with
+        # init_by_eplb is non-fragile: whichever of {_StatAccumulator,
+        # init_by_eplb} runs first installs the configured runtime;
+        # the second just reuses it. This avoids the silent state loss
+        # where a second set_default_runtime() would orphan plans
+        # already published to the first instance.
         from moe_load_balancer.adapters.sglang.eplb import (
-            SGLangEPLBRuntime,
-            set_default_runtime,
+            ensure_default_runtime,
         )
         from moe_load_balancer.core.types import RebalancePolicyConfig
 
-        runtime = SGLangEPLBRuntime(
+        runtime = ensure_default_runtime(
             rebalance_policy=RebalancePolicyConfig(
                 recording_window_size=self._server_args.expert_distribution_recorder_buffer_size,
                 min_utilization_threshold=self._server_args.eplb_min_rebalancing_utilization_threshold,
             ),
         )
-        set_default_runtime(runtime)
         self._mlb_bridge = runtime.get_stats_bridge(rank=self._rank)
 
         self._first_dump = True

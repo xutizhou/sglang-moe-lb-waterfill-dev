@@ -142,21 +142,6 @@ class EPLBManager:
             msg += f" time={time_end - time_start:.3f}s"
         logger.info(msg)
 
-    def _check_rebalance_needed(self, average_utilization_rate_over_window):
-        if average_utilization_rate_over_window is None:
-            return True
-
-        if (
-            average_utilization_rate_over_window
-            > self._server_args.eplb_min_rebalancing_utilization_threshold
-        ):
-            logger.info(
-                f"[EPLBManager] Skipped ep rebalancing: current GPU utilization {average_utilization_rate_over_window:.2f} > minimum rebalance threshold {self._server_args.eplb_min_rebalancing_utilization_threshold:.2f}"
-            )
-            return False
-
-        return True
-
     def _compute_update_layer_ids_chunks(self) -> List[List[int]]:
         all_layer_ids = sorted(
             list(self._model_runner.model.routed_experts_weights_of_layer.keys())

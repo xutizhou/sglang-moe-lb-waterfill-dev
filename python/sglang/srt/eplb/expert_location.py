@@ -148,7 +148,8 @@ class ExpertLocationMetadata:
         # ``SGLangEPLBRuntime.compute_placement``. This static method does
         # all sglang-shape work (server_args / model_config / ELM
         # extraction + writeback); MLB only sees plain scalars + tensors.
-        from moe_load_balancer.adapters.sglang.eplb import get_default_runtime
+        from moe_load_balancer.adapters.sglang.eplb import ensure_default_runtime
+        from moe_load_balancer.core.types import RebalancePolicyConfig
 
         if not isinstance(logical_count, torch.Tensor):
             logical_count = torch.tensor(logical_count)
@@ -160,7 +161,18 @@ class ExpertLocationMetadata:
         if common is None:
             return None
 
-        plan = get_default_runtime().compute_placement(
+        # ensure_default_runtime installs a configured runtime if no
+        # caller has done so yet (e.g. cold-start before
+        # _StatAccumulator.__init__). The first caller wins; subsequent
+        # calls reuse the same instance.
+        runtime = ensure_default_runtime(
+            rebalance_policy=RebalancePolicyConfig(
+                recording_window_size=server_args.expert_distribution_recorder_buffer_size,
+                min_utilization_threshold=server_args.eplb_min_rebalancing_utilization_threshold,
+            ),
+        )
+
+        plan = runtime.compute_placement(
             logical_count=logical_count,
             num_physical_experts=common["num_physical_experts"],
             num_local_physical_experts=(
