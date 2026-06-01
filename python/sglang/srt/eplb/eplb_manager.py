@@ -61,22 +61,30 @@ class EPLBManager:
             torch.get_device_module().synchronize()
             time_start = time.time()
 
-        # Phase 1.5: drain MLB recorder directly -- no round-trip through
-        # sglang's _StatAccumulator.dump dict shape. MLB still owns the
-        # buffer and the physical-to-logical conversion; sglang owns the
-        # cross-EP-rank all_reduce and the writeback.
+        # Phase 2.B: drain + skip-gate in one MLB call. MLB owns the
+        # threshold (RebalancePolicyConfig.min_utilization_threshold);
+        # sglang provides the utilization rate as a plain float from its
+        # own _UtilizationRateAccumulatorMixin.
         from moe_load_balancer.adapters.sglang.eplb import get_default_runtime
 
         mlb_runtime = get_default_runtime()
-        drained = mlb_runtime.drain_stats()
-        if drained is None:
-            logger.info("[EPLBManager] rebalance skipped: no stats observed yet")
-            return
 
-        # Check whether rebalancing is needed (utilization-rate skip gate
-        # remains in sglang for Phase 1.5; the value comes from sglang's
-        # _UtilizationRateAccumulatorMixin via MLB's stats dict).
-        if not self._check_rebalance_needed(drained["average_utilization_rate"]):
+        # Pull windowed utilization from sglang's recorder (computed by
+        # the mixin during per-forward append). Returns None if metric is
+        # disabled or threshold is the 1.0 short-circuit -- in that case
+        # MLB degrades to "always rebalance".
+        observed_utilization = (
+            get_global_expert_distribution_recorder().get_average_utilization_rate()
+        )
+
+        drained = mlb_runtime.drain_for_rebalance(
+            observed_utilization_rate=observed_utilization,
+        )
+        if drained is None:
+            logger.info(
+                "[EPLBManager] rebalance skipped (no data or utilization "
+                f"{observed_utilization} above threshold)"
+            )
             return
 
         # Cross-rank reduction (distributed comm is rightly sglang's job).

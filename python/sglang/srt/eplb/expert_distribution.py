@@ -119,6 +119,13 @@ class ExpertDistributionRecorder(ABC):
     def recording(self):
         return False
 
+    def get_average_utilization_rate(self):
+        """Return the windowed average GPU expert-utilization rate, or
+        None if not available (no data yet, or threshold is 1.0 / metric
+        disabled). Public accessor used by EPLBManager.rebalance to feed
+        the MLB skip-gate; the noop recorder returns None."""
+        return None
+
     def _on_not_implemented(self):
         raise Exception(
             "Please set ServerArgs.expert_distribution_recorder_mode to use ExpertDistributionRecorder."
@@ -276,6 +283,17 @@ class _ExpertDistributionRecorderReal(ExpertDistributionRecorder):
     @property
     def recording(self):
         return self._recording
+
+    def get_average_utilization_rate(self):
+        """Pull the windowed utilization rate from the accumulator, if
+        the mixin computed one. None on threshold=1.0 short-circuit."""
+        acc = self._accumulator
+        if acc is None or not hasattr(acc, "_get_global_average_utilization_rate"):
+            return None
+        try:
+            return acc._get_global_average_utilization_rate()
+        except Exception:
+            return None
 
 
 _global_expert_distribution_recorder: Optional[ExpertDistributionRecorder] = (
