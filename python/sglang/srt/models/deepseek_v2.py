@@ -1227,6 +1227,7 @@ class DeepseekV2MoE(nn.Module):
                 hidden_states,
                 router_logits,
                 num_token_non_padded=forward_batch.num_token_non_padded,
+                waterfill_is_decode=forward_batch.forward_mode.is_decode(),
                 expert_location_dispatch_info=(
                     ExpertLocationDispatchInfo.init_new(
                         layer_id=self.layer_id,
@@ -1238,7 +1239,9 @@ class DeepseekV2MoE(nn.Module):
             )
         else:
             topk_output = self.topk.empty_topk_output(
-                hidden_states.device, layer_id=self.layer_id
+                hidden_states.device,
+                layer_id=self.layer_id,
+                waterfill_is_decode=forward_batch.forward_mode.is_decode(),
             )
 
         if sbo_overlap_dispatch_flag:
@@ -1465,6 +1468,7 @@ class DeepseekV2MoE(nn.Module):
                     hidden_states=hidden_states,
                     router_logits=router_logits,
                     num_token_non_padded=state.forward_batch.num_token_non_padded,
+                    waterfill_is_decode=state.forward_batch.forward_mode.is_decode(),
                     expert_location_dispatch_info=(
                         ExpertLocationDispatchInfo.init_new(
                             layer_id=self.layer_id,
@@ -1476,7 +1480,9 @@ class DeepseekV2MoE(nn.Module):
                 )
         else:
             state.topk_output = self.topk.empty_topk_output(
-                hidden_states.device, layer_id=self.layer_id
+                hidden_states.device,
+                layer_id=self.layer_id,
+                waterfill_is_decode=state.forward_batch.forward_mode.is_decode(),
             )
 
     def op_dispatch_a(self, state):

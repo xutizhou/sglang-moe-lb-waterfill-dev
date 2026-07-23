@@ -23,9 +23,12 @@ from sglang.kernels.ops.moe.deepep_waterfill_kernels import (
     WaterfillDispatchPlan,
     _count_routed_per_rank_kernel,
     _empty_expanded,
+    count_active_experts_per_rank,
+    count_marked_experts_per_rank,
     materialize_waterfill_dispatch_fused,
 )
 from sglang.srt.environ import envs
+from sglang.srt.layers.dp_attention import get_is_extend_in_batch
 from sglang.srt.layers.moe.topk import StandardTopKOutput
 
 
@@ -88,15 +91,19 @@ class WaterfillBalancer:
             1.0 / routed_scaling_factor if routed_scaling_factor != 0 else 1.0
         )
         self._counts_buf: Optional[Tensor] = None
+        self._active_experts_buf: Optional[Tensor] = None
         self.use_static_waterfill = not envs.SGLANG_DISABLE_STATIC_WATERFILL.get()
+
+    def _get_counts_buf(self, device: torch.device) -> Tensor:
+        if self._counts_buf is None:
+            self._counts_buf = torch.zeros(
+                self.world_size, dtype=torch.int64, device=device
+            )
+        return self._counts_buf
 
     def count_local_routed(self, topk_ids: Tensor) -> Tensor:
         """Count routed tokens per rank via Triton kernel (uses original expert IDs)."""
-        if self._counts_buf is None:
-            self._counts_buf = torch.zeros(
-                self.world_size, dtype=torch.int64, device=topk_ids.device
-            )
-        buf = self._counts_buf
+        buf = self._get_counts_buf(topk_ids.device)
         buf.zero_()
         num_tokens = topk_ids.shape[0]
         if num_tokens == 0:
@@ -115,8 +122,22 @@ class WaterfillBalancer:
         )
         return buf
 
+    def count_local_active_experts(self, topk_ids: Tensor) -> Tensor:
+        """Count unique routed experts activated on each rank by this chunk."""
+        if self._active_experts_buf is None:
+            self._active_experts_buf = torch.zeros(
+                self.num_routed_experts, dtype=torch.int32, device=topk_ids.device
+            )
+        return count_active_experts_per_rank(
+            topk_ids,
+            self._active_experts_buf,
+            self._get_counts_buf(topk_ids.device),
+            self.num_routed_experts,
+            self.world_size,
+        )
+
     def _is_low_batch(self, num_tokens: int) -> bool:
-        """Return whether waterfill should skip balancing for small batches."""
+        """Return whether token-count waterfill should skip a small batch."""
         return num_tokens < self.MIN_BATCH_FOR_BALANCE
 
     def _can_skip_dispatch_plan_for_low_batch(self, num_tokens: int) -> bool:
@@ -124,13 +145,19 @@ class WaterfillBalancer:
         return self.use_static_waterfill and self._is_low_batch(num_tokens)
 
     def _build_static_dispatch_plan(
-        self, routed_counts: Tensor
+        self,
+        rank_load: Tensor,
+        *,
+        minimize_active_experts: bool,
+        fuse_active_expert_load: bool = False,
     ) -> WaterfillDispatchPlan:
         """Build static-mode Waterfill inputs from current local routed counts."""
         return WaterfillDispatchPlan(
-            rank_load=routed_counts,
+            rank_load=rank_load,
             allow_all_ranks=True,
             target_total=0,
+            minimize_active_experts=minimize_active_experts,
+            fuse_active_expert_load=fuse_active_expert_load,
         )
 
     def _build_dynamic_dispatch_plan(
@@ -160,6 +187,8 @@ class WaterfillBalancer:
             rank_load=rank_load,
             allow_all_ranks=allow_all_ranks,
             target_total=target_total,
+            minimize_active_experts=False,
+            fuse_active_expert_load=False,
         )
 
     @staticmethod
@@ -183,18 +212,67 @@ class WaterfillBalancer:
         buf = moe_expert_parallel_all_reduce(buf)
         return buf[:world], buf[world:]
 
+    @staticmethod
+    def _all_reduce_active_experts(local_active_experts: Tensor) -> Tensor:
+        """Union active-expert markers across the EP group via a sum reduction."""
+        from sglang.srt.distributed.communication_op import (
+            moe_expert_parallel_all_reduce,
+        )
+
+        return moe_expert_parallel_all_reduce(local_active_experts)
+
     def _build_dispatch_plan(
-        self, topk_ids: Tensor, num_tokens: int
+        self,
+        topk_ids: Tensor,
+        num_tokens: int,
+        *,
+        minimize_active_experts: bool,
     ) -> Optional[WaterfillDispatchPlan]:
         """Prepare dispatch state for the waterfill selection boundary."""
-        local_routed_counts = self.count_local_routed(topk_ids)
+        if (
+            minimize_active_experts
+            and self.use_static_waterfill
+            and num_tokens <= 256
+            and self.old_experts_per_rank <= 32
+        ):
+            return self._build_static_dispatch_plan(
+                self._get_counts_buf(topk_ids.device),
+                minimize_active_experts=True,
+                fuse_active_expert_load=True,
+            )
+
+        if minimize_active_experts:
+            local_rank_load = self.count_local_active_experts(topk_ids)
+        else:
+            local_rank_load = self.count_local_routed(topk_ids)
+
         if self.use_static_waterfill:
-            return self._build_static_dispatch_plan(local_routed_counts)
+            return self._build_static_dispatch_plan(
+                local_rank_load,
+                minimize_active_experts=minimize_active_experts,
+            )
+
+        if minimize_active_experts:
+            assert self._active_experts_buf is not None
+            global_active_experts = self._all_reduce_active_experts(
+                self._active_experts_buf
+            )
+            global_rank_load = count_marked_experts_per_rank(
+                global_active_experts,
+                self._get_counts_buf(topk_ids.device),
+                self.num_routed_experts,
+                self.world_size,
+            )
+            return WaterfillDispatchPlan(
+                rank_load=global_rank_load,
+                allow_all_ranks=True,
+                target_total=0,
+                minimize_active_experts=True,
+                fuse_active_expert_load=False,
+            )
 
         global_routed_counts, local_tokens_per_rank = (
-            WaterfillBalancer._all_reduce_dynamic_rank_load(
-                local_routed_counts, num_tokens
-            )
+            WaterfillBalancer._all_reduce_dynamic_rank_load(local_rank_load, num_tokens)
         )
         if self._is_low_batch(num_tokens):
             return None
@@ -215,7 +293,7 @@ class WaterfillBalancer:
         if num_tokens == 0:
             return _empty_expanded(topk_ids, topk_weights)
 
-        if self._is_low_batch(num_tokens):
+        if self._is_low_batch(num_tokens) and not dispatch_plan.minimize_active_experts:
             return expand_topk_with_shared_expert(
                 topk_ids,
                 topk_weights,
@@ -235,6 +313,8 @@ class WaterfillBalancer:
             self.shared_weight,
             allow_all_ranks=dispatch_plan.allow_all_ranks,
             target_total=dispatch_plan.target_total,
+            minimize_active_experts=dispatch_plan.minimize_active_experts,
+            fuse_active_expert_load=dispatch_plan.fuse_active_expert_load,
         )
 
     @staticmethod
@@ -264,16 +344,32 @@ class WaterfillBalancer:
         return self._with_expanded_topk(topk_output, expanded_ids, expanded_weights)
 
     def expand_topk(
-        self, topk_output: StandardTopKOutput, num_tokens: int
+        self,
+        topk_output: StandardTopKOutput,
+        num_tokens: int,
+        *,
+        is_decode: Optional[bool] = None,
     ) -> StandardTopKOutput:
         """Expand topk [N, 8] -> [N, 9] with waterfill-assigned shared expert."""
-        if self._can_skip_dispatch_plan_for_low_batch(num_tokens):
-            # Static mode can use local expansion without communication for small
-            # decode-sized batches. Dynamic mode still all-reduces before local
-            # expansion so all ranks participate consistently.
+        # DeepSeek passes the logical forward mode explicitly. The fallback is
+        # retained for other Waterfill callers, but it is not sufficient for
+        # phase detection during prefill CUDA Graph capture because the DeepEP
+        # dispatcher intentionally forces its extend flag to False there.
+        minimize_active_experts = (
+            not get_is_extend_in_batch() if is_decode is None else is_decode
+        )
+        if not minimize_active_experts and self._can_skip_dispatch_plan_for_low_batch(
+            num_tokens
+        ):
+            # Static token-count mode can use local expansion for small
+            # prefill chunks. Decode still builds its active-expert plan.
             return self._expand_local_shared(topk_output)
 
-        dispatch_plan = self._build_dispatch_plan(topk_output.topk_ids, num_tokens)
+        dispatch_plan = self._build_dispatch_plan(
+            topk_output.topk_ids,
+            num_tokens,
+            minimize_active_experts=minimize_active_experts,
+        )
         if dispatch_plan is None:
             if num_tokens == 0:
                 expanded_ids, expanded_weights = _empty_expanded(

@@ -12,7 +12,9 @@ import torch
 from torch import nn
 
 from sglang.srt.layers.moe import topk as topk_module
+from sglang.srt.layers.moe import waterfill as waterfill_module
 from sglang.srt.layers.moe.topk import TopKConfig
+from sglang.srt.layers.moe.waterfill import WaterfillBalancer
 from sglang.srt.models.deepseek_v2 import DeepseekV2MoE
 from sglang.srt.runtime_context import get_parallel
 from sglang.test.test_utils import CustomTestCase
@@ -31,6 +33,123 @@ class _FakeExpertParam(nn.Module):
 
 
 class TestWaterfillEPLB(CustomTestCase):
+    def test_small_prefill_keeps_existing_local_fast_path(self):
+        balancer = WaterfillBalancer.__new__(WaterfillBalancer)
+        balancer.use_static_waterfill = True
+        topk_output = topk_module.StandardTopKOutput(
+            topk_weights=torch.ones((2, 2)),
+            topk_ids=torch.zeros((2, 2), dtype=torch.int32),
+            router_logits=torch.empty((2, 0)),
+        )
+
+        with (
+            patch.object(
+                waterfill_module, "get_is_extend_in_batch", return_value=False
+            ),
+            patch.object(
+                balancer, "_expand_local_shared", return_value=topk_output
+            ) as expand_local,
+            patch.object(balancer, "_build_dispatch_plan") as build_plan,
+        ):
+            actual = balancer.expand_topk(topk_output, num_tokens=2, is_decode=False)
+
+        self.assertIs(actual, topk_output)
+        expand_local.assert_called_once_with(topk_output)
+        build_plan.assert_not_called()
+
+    def test_small_decode_uses_active_expert_dispatch_plan(self):
+        balancer = WaterfillBalancer.__new__(WaterfillBalancer)
+        balancer.use_static_waterfill = True
+        topk_output = topk_module.StandardTopKOutput(
+            topk_weights=torch.ones((2, 2)),
+            topk_ids=torch.zeros((2, 2), dtype=torch.int32),
+            router_logits=torch.empty((2, 0)),
+        )
+
+        with (
+            patch.object(
+                balancer, "_build_dispatch_plan", return_value=None
+            ) as build_plan,
+            patch.object(
+                balancer, "_expand_local_shared", return_value=topk_output
+            ) as expand_local,
+        ):
+            actual = balancer.expand_topk(topk_output, num_tokens=2, is_decode=True)
+
+        self.assertIs(actual, topk_output)
+        build_plan.assert_called_once_with(
+            topk_output.topk_ids,
+            2,
+            minimize_active_experts=True,
+        )
+        expand_local.assert_called_once_with(topk_output)
+
+    def test_dynamic_decode_unions_active_experts_across_ep_group(self):
+        balancer = WaterfillBalancer.__new__(WaterfillBalancer)
+        balancer.use_static_waterfill = False
+        balancer.num_routed_experts = 16
+        balancer.world_size = 4
+        balancer._active_experts_buf = torch.tensor([1, 0, 0, 0] * 4, dtype=torch.int32)
+        local_rank_load = torch.tensor([1, 1, 1, 1], dtype=torch.int64)
+        global_active_experts = torch.tensor([2, 0, 1, 0] * 4, dtype=torch.int32)
+        global_rank_load = torch.tensor([2, 2, 2, 2], dtype=torch.int64)
+        topk_ids = torch.zeros((2, 2), dtype=torch.int32)
+
+        with (
+            patch.object(
+                balancer,
+                "count_local_active_experts",
+                return_value=local_rank_load,
+            ),
+            patch.object(
+                balancer,
+                "_all_reduce_active_experts",
+                return_value=global_active_experts,
+            ) as all_reduce,
+            patch.object(
+                waterfill_module,
+                "count_marked_experts_per_rank",
+                return_value=global_rank_load,
+            ) as count_global,
+            patch.object(
+                balancer,
+                "_get_counts_buf",
+                return_value=torch.empty(4, dtype=torch.int64),
+            ),
+        ):
+            plan = balancer._build_dispatch_plan(
+                topk_ids,
+                num_tokens=2,
+                minimize_active_experts=True,
+            )
+
+        all_reduce.assert_called_once_with(balancer._active_experts_buf)
+        count_global.assert_called_once()
+        self.assertIs(plan.rank_load, global_rank_load)
+        self.assertTrue(plan.allow_all_ranks)
+        self.assertTrue(plan.minimize_active_experts)
+        self.assertFalse(plan.fuse_active_expert_load)
+
+    def test_static_decode_fuses_chunk_active_expert_count(self):
+        balancer = WaterfillBalancer.__new__(WaterfillBalancer)
+        balancer.use_static_waterfill = True
+        balancer.world_size = 8
+        balancer.old_experts_per_rank = 32
+        balancer._counts_buf = None
+        topk_ids = torch.zeros((64, 8), dtype=torch.int32)
+
+        with patch.object(balancer, "count_local_active_experts") as count_active:
+            plan = balancer._build_dispatch_plan(
+                topk_ids,
+                num_tokens=64,
+                minimize_active_experts=True,
+            )
+
+        count_active.assert_not_called()
+        self.assertTrue(plan.allow_all_ranks)
+        self.assertTrue(plan.minimize_active_experts)
+        self.assertTrue(plan.fuse_active_expert_load)
+
     def test_deepseek_moe_get_moe_weights_excludes_fused_shared_slot(self):
         experts = _FakeExpertParam()
         moe = SimpleNamespace(num_fused_shared_experts=1, experts=experts)

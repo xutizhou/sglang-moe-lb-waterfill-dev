@@ -452,7 +452,13 @@ class TopK(MultiPlatformOp):
             allow_routed_experts_capture=allow_routed_experts_capture,
         )
 
-    def _apply_waterfill(self, topk_output: TopKOutput, num_tokens: int) -> TopKOutput:
+    def _apply_waterfill(
+        self,
+        topk_output: TopKOutput,
+        num_tokens: int,
+        *,
+        waterfill_is_decode: Optional[bool] = None,
+    ) -> TopKOutput:
         if self.enable_waterfill and self.waterfill_balancer is None:
             raise RuntimeError(
                 "Waterfill TopK must be prepared by ModelRunner before forward."
@@ -460,7 +466,9 @@ class TopK(MultiPlatformOp):
         if self.waterfill_balancer is None:
             return topk_output
         assert TopKOutputChecker.format_is_standard(topk_output)
-        return self.waterfill_balancer.expand_topk(topk_output, num_tokens)
+        return self.waterfill_balancer.expand_topk(
+            topk_output, num_tokens, is_decode=waterfill_is_decode
+        )
 
     def forward_native(
         self,
@@ -469,6 +477,7 @@ class TopK(MultiPlatformOp):
         *,
         num_token_non_padded: Optional[torch.Tensor] = None,
         expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
+        waterfill_is_decode: Optional[bool] = None,
     ) -> TopKOutput:
         self.topk_config.torch_native = True
         topk_output = select_experts(
@@ -479,7 +488,11 @@ class TopK(MultiPlatformOp):
             num_token_non_padded=num_token_non_padded,
             expert_location_dispatch_info=expert_location_dispatch_info,
         )
-        return self._apply_waterfill(topk_output, hidden_states.shape[0])
+        return self._apply_waterfill(
+            topk_output,
+            hidden_states.shape[0],
+            waterfill_is_decode=waterfill_is_decode,
+        )
 
     def forward_cuda(
         self,
@@ -488,6 +501,7 @@ class TopK(MultiPlatformOp):
         *,
         num_token_non_padded: Optional[torch.Tensor] = None,
         expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
+        waterfill_is_decode: Optional[bool] = None,
     ) -> TopKOutput:
         if self.topk_config.output_format is not None:
             output_format = self.topk_config.output_format
@@ -543,7 +557,11 @@ class TopK(MultiPlatformOp):
                     num_token_non_padded=num_token_non_padded,
                     expert_location_dispatch_info=expert_location_dispatch_info,
                 )
-        return self._apply_waterfill(topk_output, hidden_states.shape[0])
+        return self._apply_waterfill(
+            topk_output,
+            hidden_states.shape[0],
+            waterfill_is_decode=waterfill_is_decode,
+        )
 
     def forward_cpu(
         self,
@@ -552,6 +570,7 @@ class TopK(MultiPlatformOp):
         *,
         num_token_non_padded: Optional[torch.Tensor] = None,
         expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
+        waterfill_is_decode: Optional[bool] = None,
     ) -> TopKOutput:
         topk_output = select_experts(
             hidden_states=hidden_states,
@@ -561,7 +580,11 @@ class TopK(MultiPlatformOp):
             num_token_non_padded=num_token_non_padded,
             expert_location_dispatch_info=expert_location_dispatch_info,
         )
-        return self._apply_waterfill(topk_output, hidden_states.shape[0])
+        return self._apply_waterfill(
+            topk_output,
+            hidden_states.shape[0],
+            waterfill_is_decode=waterfill_is_decode,
+        )
 
     def forward_npu(
         self,
@@ -570,6 +593,7 @@ class TopK(MultiPlatformOp):
         *,
         num_token_non_padded: Optional[torch.Tensor] = None,
         expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
+        waterfill_is_decode: Optional[bool] = None,
     ) -> TopKOutput:
 
         from sglang.srt.hardware_backend.npu.moe.topk import fused_topk_npu
@@ -584,7 +608,11 @@ class TopK(MultiPlatformOp):
         )
 
     def empty_topk_output(
-        self, device: torch.device, *, layer_id: Optional[int] = None
+        self,
+        device: torch.device,
+        *,
+        layer_id: Optional[int] = None,
+        waterfill_is_decode: Optional[bool] = None,
     ) -> TopKOutput:
         """Return an empty topk output for a rank with zero tokens this forward.
 
@@ -626,7 +654,9 @@ class TopK(MultiPlatformOp):
                     (0, topk_output.topk_weights.shape[-1] + n)
                 ),
             )
-        return self._apply_waterfill(topk_output, 0)
+        return self._apply_waterfill(
+            topk_output, 0, waterfill_is_decode=waterfill_is_decode
+        )
 
     def forward_xpu(
         self,
@@ -635,6 +665,7 @@ class TopK(MultiPlatformOp):
         *,
         num_token_non_padded: Optional[torch.Tensor] = None,
         expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
+        waterfill_is_decode: Optional[bool] = None,
     ) -> TopKOutput:
         self.topk_config.torch_native = True
         # [NOTE] XPU device support for topk kernels
