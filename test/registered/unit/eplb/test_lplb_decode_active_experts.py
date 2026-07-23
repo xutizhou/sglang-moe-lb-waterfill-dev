@@ -47,6 +47,39 @@ def _integral_decode_case(device: str):
     return topk_ids, global_counts, log2phy_map
 
 
+def _compact_decode_map(
+    log2phy_map: torch.Tensor,
+    *,
+    num_physical: int,
+    num_gpus: int,
+):
+    physical_per_gpu = num_physical // num_gpus
+    valid = log2phy_map >= 0
+    ranks = log2phy_map.masked_fill(~valid, 0) // physical_per_gpu
+    physical_by_rank = []
+    for rank in range(num_gpus):
+        on_rank = valid & (ranks == rank)
+        first_index = on_rank.to(torch.int32).argmax(dim=1, keepdim=True)
+        first_physical = log2phy_map.gather(1, first_index).squeeze(1)
+        physical_by_rank.append(first_physical.masked_fill(~on_rank.any(dim=1), -1))
+    physical_by_rank = torch.stack(physical_by_rank, dim=1).to(torch.int32)
+    rank_mask = torch.zeros(
+        log2phy_map.shape[0], dtype=torch.int32, device=log2phy_map.device
+    )
+    for rank in range(num_gpus):
+        rank_mask.bitwise_or_((physical_by_rank[:, rank] >= 0).to(torch.int32) << rank)
+    replicated_logical = (
+        torch.nonzero(rank_mask.bitwise_and(rank_mask - 1) != 0)
+        .flatten()
+        .to(torch.int32)
+    )
+    return (
+        physical_by_rank.contiguous(),
+        rank_mask.contiguous(),
+        replicated_logical.contiguous(),
+    )
+
+
 def test_decode_solver_uses_binary_expert_activation_load():
     solver = LPLBSolver.__new__(LPLBSolver)
     solver.num_logical = 4
@@ -60,6 +93,34 @@ def test_decode_solver_uses_binary_expert_activation_load():
 
     torch.testing.assert_close(token_load, torch.tensor([3.0, 1.0, 0.0, 2.0]))
     torch.testing.assert_close(activation_load, torch.tensor([1.0, 1.0, 0.0, 1.0]))
+
+
+def test_decode_compaction_counts_distinct_ranks(monkeypatch):
+    from sglang.kernels.ops.lplb import torch_solver
+
+    monkeypatch.setattr(torch_solver, "warmup", lambda *_args, **_kwargs: None)
+    # Logical expert 0 has two physical copies on rank 0 and one on rank 1.
+    # Only the first rank-0 copy is retained and the expert is movable across
+    # two ranks, not counted as three independent choices.
+    phy2log = torch.tensor([0, 0, 1, 0], dtype=torch.int64)
+    log2phy = torch.tensor(
+        [[0, 1, 3], [2, -1, -1]],
+        dtype=torch.int64,
+    )
+    solver = LPLBSolver(phy2log, log2phy, num_gpus=2)
+
+    torch.testing.assert_close(
+        solver.decode_physical_by_rank,
+        torch.tensor([[0, 3], [-1, 2]], dtype=torch.int32),
+    )
+    torch.testing.assert_close(
+        solver.decode_rank_mask,
+        torch.tensor([0b11, 0b10], dtype=torch.int32),
+    )
+    torch.testing.assert_close(
+        solver.decode_log_replicated,
+        torch.tensor([0], dtype=torch.int32),
+    )
 
 
 def test_decode_dispatch_co_locates_each_logical_expert():
@@ -187,13 +248,17 @@ def test_decode_integral_cuda_matches_torch_reference():
         num_physical=12,
         num_gpus=4,
     )
-    actual = dispatch_decode_integral(
-        topk_ids,
-        global_counts,
+    physical_by_rank, rank_mask, replicated_logical = _compact_decode_map(
         log2phy_map,
         num_physical=12,
         num_gpus=4,
-        num_replicated=4,
+    )
+    actual = dispatch_decode_integral(
+        topk_ids,
+        global_counts,
+        physical_by_rank,
+        rank_mask,
+        replicated_logical,
     )
 
     torch.testing.assert_close(actual, expected)

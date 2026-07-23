@@ -299,16 +299,12 @@ def dispatch_active_experts(
 @cache_once
 def _dispatch_decode_integral_module(
     num_logical: int,
-    max_copies: int,
-    num_physical: int,
     num_gpus: int,
     num_replicated: int,
     block_dim: int,
 ) -> Module:
     args = make_cpp_args(
         num_logical,
-        max_copies,
-        num_physical,
         num_gpus,
         num_replicated,
         block_dim,
@@ -326,11 +322,9 @@ def _dispatch_decode_integral_module(
 def dispatch_decode_integral(
     topk_ids: torch.Tensor,
     global_counts: torch.Tensor,
-    log2phy_map: torch.Tensor,
-    *,
-    num_physical: int,
-    num_gpus: int,
-    num_replicated: int,
+    physical_by_rank: torch.Tensor,
+    rank_mask: torch.Tensor,
+    replicated_logical: torch.Tensor,
 ) -> torch.Tensor:
     """Assign decode experts integrally and map top-k ids in one CUDA launch."""
     if not topk_ids.is_cuda:
@@ -340,17 +334,18 @@ def dispatch_decode_integral(
         )
     original_shape = topk_ids.shape
     flat_ids = topk_ids.reshape(-1).contiguous().to(torch.int32)
-    num_logical, max_copies = log2phy_map.shape
+    num_logical, num_gpus = physical_by_rank.shape
     assert global_counts.shape == (num_logical,)
     assert global_counts.dtype == torch.float32
-    assert log2phy_map.dtype == torch.int64
-    assert num_physical % num_gpus == 0
+    assert physical_by_rank.dtype == torch.int32
+    assert rank_mask.shape == (num_logical,)
+    assert rank_mask.dtype == torch.int32
+    assert replicated_logical.dtype == torch.int32
+    num_replicated = replicated_logical.shape[0]
 
     out = torch.empty(flat_ids.shape[0], dtype=torch.int32, device=topk_ids.device)
     module = _dispatch_decode_integral_module(
         num_logical,
-        max_copies,
-        num_physical,
         num_gpus,
         num_replicated,
         DISPATCH_BLOCK_DIM,
@@ -359,7 +354,9 @@ def dispatch_decode_integral(
         out,
         flat_ids,
         global_counts,
-        log2phy_map.contiguous(),
+        physical_by_rank,
+        rank_mask,
+        replicated_logical,
     )
     return out.view(original_shape).to(topk_ids.dtype)
 
@@ -390,8 +387,6 @@ def dispatch_decode_integral_torch_reference(
             fixed_token_load[rank] += count
         else:
             replicated.append(logical)
-
-    replicated.sort(key=lambda logical: -int(global_counts[logical]))
 
     minimum_capacity = max(fixed_active_load)
     for capacity in range(

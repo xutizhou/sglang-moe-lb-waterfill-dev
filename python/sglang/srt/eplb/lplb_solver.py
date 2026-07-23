@@ -180,6 +180,48 @@ class LPLBSolver:
         # without per-call .long() casts (Tier 1 optimization).
         self.log2phy = log2phy.to(torch.int64).contiguous()
 
+        # Compact the padded logical-to-physical table for the decode hot path.
+        # A logical expert can have many redundant physical copies, but only
+        # one copy per rank can reduce that rank's active-expert load. Store
+        # one physical id per eligible rank plus an eligibility bitmask.
+        if num_gpus > 32:
+            raise ValueError(
+                "Integral decode dispatch supports at most 32 EP ranks; "
+                f"got {num_gpus}."
+            )
+        valid = self.log2phy >= 0
+        safe_physical = self.log2phy.masked_fill(~valid, 0)
+        physical_rank = torch.div(safe_physical, num_phy_per_gpu, rounding_mode="floor")
+        physical_by_rank = []
+        for rank in range(num_gpus):
+            on_rank = valid & (physical_rank == rank)
+            first_index = on_rank.to(torch.int32).argmax(dim=1, keepdim=True)
+            first_physical = self.log2phy.gather(1, first_index).squeeze(1)
+            physical_by_rank.append(first_physical.masked_fill(~on_rank.any(dim=1), -1))
+        self.decode_physical_by_rank = (
+            torch.stack(physical_by_rank, dim=1).to(torch.int32).contiguous()
+        )
+        if bool((self.decode_physical_by_rank < 0).all(dim=1).any()):
+            raise ValueError(
+                "Every logical expert must have at least one physical copy."
+            )
+        self.decode_rank_mask = torch.zeros(
+            self.num_logical, dtype=torch.int32, device=device
+        )
+        for rank in range(num_gpus):
+            self.decode_rank_mask.bitwise_or_(
+                (self.decode_physical_by_rank[:, rank] >= 0).to(torch.int32) << rank
+            )
+        self.decode_rank_mask = self.decode_rank_mask.contiguous()
+        self.decode_log_replicated = (
+            torch.nonzero(
+                self.decode_rank_mask.bitwise_and(self.decode_rank_mask - 1) != 0
+            )
+            .flatten()
+            .to(torch.int32)
+            .contiguous()
+        )
+
         # Pre-JIT-compile the fused IPM kernel for this (NC, NV) shape so the
         # 20-40s compile cost happens once at startup rather than on the first
         # real request. No-op when the fused backend is unavailable.
@@ -265,10 +307,9 @@ class LPLBSolver:
         return cuda_solver.dispatch_decode_integral(
             topk_ids,
             global_counts,
-            self.log2phy,
-            num_physical=self.num_phy,
-            num_gpus=self.num_gpus,
-            num_replicated=self.num_red_log,
+            self.decode_physical_by_rank,
+            self.decode_rank_mask,
+            self.decode_log_replicated,
         )
 
     def _count_and_all_reduce(self, topk_ids: torch.Tensor) -> torch.Tensor:
