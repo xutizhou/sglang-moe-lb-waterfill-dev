@@ -232,24 +232,7 @@ class LPLBSolver:
         Returns:
             log2phy_prob: (num_logical, max_copies) float32 probability tensor.
         """
-        device = topk_ids.device
-
-        # Step 1: Count local tokens per logical expert.
-        # topk_ids comes from the router and is by construction in
-        # [0, num_logical), so we can scatter_add directly without filtering.
-        # Boolean masking + numel() (the previous defensive form) forced a
-        # GPU->host sync on every forward pass via aten::nonzero and a
-        # tensor-shape read; scatter_add on the flattened tensor is async
-        # and a no-op when topk_ids is empty (DP-attention idle rank case).
-        local_counts = torch.zeros(self.num_logical, dtype=torch.int32, device=device)
-        flat_ids = topk_ids.flatten()
-        local_counts.scatter_add_(
-            0,
-            flat_ids.long(),
-            torch.ones_like(flat_ids, dtype=torch.int32),
-        )
-
-        # Step 2: All-reduce to get global counts across all EP ranks.
+        # Step 1-2: Count local tokens and all-reduce across EP ranks.
         # All EP ranks must participate — empty-token ranks contribute zeros.
         # After all-reduce, every rank has identical global_counts and solves
         # the same LP independently, so no broadcast is needed.
@@ -257,9 +240,7 @@ class LPLBSolver:
         # (ca_comm / pymscclpp / ...) depending on tensor size; small tensors
         # like ours (~num_logical * 4 B) typically take the out-of-place path,
         # so we must capture the return value.
-        global_counts = local_counts.float()
-        if self.ep_group is not None:
-            global_counts = self.ep_group.all_reduce(global_counts)
+        global_counts = self._count_and_all_reduce(topk_ids)
 
         if minimize_active_experts:
             # The all-reduce must happen before the threshold so an expert
@@ -269,6 +250,41 @@ class LPLBSolver:
 
         # Step 3: Run LP solver
         return self._solve(global_counts)
+
+    def solve_decode_active_experts(self, topk_ids: torch.Tensor) -> torch.Tensor:
+        """Assign active decode experts directly to physical replicas.
+
+        Unlike the relaxed LP path, this returns physical top-k ids. The fused
+        CUDA kernel rounds the assignment integrally, uses token count only as
+        a secondary tie breaker, and maps the ids in the same launch.
+        """
+        global_counts = self._count_and_all_reduce(topk_ids)
+
+        from sglang.kernels.ops.lplb import cuda_solver
+
+        return cuda_solver.dispatch_decode_integral(
+            topk_ids,
+            global_counts,
+            self.log2phy,
+            num_physical=self.num_phy,
+            num_gpus=self.num_gpus,
+            num_replicated=self.num_red_log,
+        )
+
+    def _count_and_all_reduce(self, topk_ids: torch.Tensor) -> torch.Tensor:
+        """Return global logical-expert token counts as float32."""
+        device = topk_ids.device
+        local_counts = torch.zeros(self.num_logical, dtype=torch.int32, device=device)
+        flat_ids = topk_ids.flatten()
+        local_counts.scatter_add_(
+            0,
+            flat_ids.long(),
+            torch.ones_like(flat_ids, dtype=torch.int32),
+        )
+        global_counts = local_counts.float()
+        if self.ep_group is not None:
+            global_counts = self.ep_group.all_reduce(global_counts)
+        return global_counts
 
     def _solve(self, global_counts: torch.Tensor) -> torch.Tensor:
         """Three CUDA kernel launches replace ~14 torch ops.

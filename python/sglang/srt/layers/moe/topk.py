@@ -631,14 +631,15 @@ class TopK(MultiPlatformOp):
 
             lplb_solver = get_global_lplb_solver(layer_id)
             if lplb_solver is not None:
-                lplb_solver.solve(
-                    torch.empty(
-                        (0, self.topk_config.top_k),
-                        dtype=torch.int32,
-                        device=device,
-                    ),
-                    minimize_active_experts=bool(waterfill_is_decode),
+                empty_topk_ids = torch.empty(
+                    (0, self.topk_config.top_k),
+                    dtype=torch.int32,
+                    device=device,
                 )
+                if waterfill_is_decode:
+                    lplb_solver.solve_decode_active_experts(empty_topk_ids)
+                else:
+                    lplb_solver.solve(empty_topk_ids)
         topk = self.topk_config.top_k - self.topk_config.num_fused_shared_experts
         with use_symmetric_memory(
             get_tp_group(), disabled=not is_allocation_symmetric()
@@ -1876,6 +1877,7 @@ def _post_process_topk_ids(
         # LP path: solve LP outside torch.compile (the solver contains an
         # EP all-reduce that can't run inside compiled regions).
         log2phy_prob = None
+        lplb_physical_topk_ids = None
         if (
             expert_location_dispatch_info is not None
             and getattr(expert_location_dispatch_info, "ep_dispatch_algorithm", None)
@@ -1885,17 +1887,21 @@ def _post_process_topk_ids(
 
             lplb_solver = get_global_lplb_solver(layer_id)
             if lplb_solver is not None:
-                log2phy_prob = lplb_solver.solve(
-                    topk_ids,
-                    minimize_active_experts=lplb_is_decode,
-                )
+                if lplb_is_decode:
+                    lplb_physical_topk_ids = lplb_solver.solve_decode_active_experts(
+                        topk_ids
+                    )
+                else:
+                    log2phy_prob = lplb_solver.solve(topk_ids)
 
-        if log2phy_prob is not None:
+        if lplb_physical_topk_ids is not None:
+            topk_ids = lplb_physical_topk_ids
+            _mask_topk_ids_padded_region(topk_ids, num_token_non_padded)
+        elif log2phy_prob is not None:
             topk_ids = topk_ids_logical_to_physical(
                 topk_ids,
                 expert_location_dispatch_info,
                 log2phy_prob,
-                minimize_active_experts=lplb_is_decode,
             )
             _mask_topk_ids_padded_region(topk_ids, num_token_non_padded)
         elif use_per_rank_shared_slots:

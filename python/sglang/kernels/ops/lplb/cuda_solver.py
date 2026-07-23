@@ -296,6 +296,193 @@ def dispatch_active_experts(
     return out.view(original_shape).to(topk_ids.dtype)
 
 
+@cache_once
+def _dispatch_decode_integral_module(
+    num_logical: int,
+    max_copies: int,
+    num_physical: int,
+    num_gpus: int,
+    num_replicated: int,
+    block_dim: int,
+) -> Module:
+    args = make_cpp_args(
+        num_logical,
+        max_copies,
+        num_physical,
+        num_gpus,
+        num_replicated,
+        block_dim,
+    )
+    return load_jit(
+        "lplb_dispatch_decode_integral",
+        *args,
+        cuda_files=["lplb/dispatch_decode_integral.cuh"],
+        cuda_wrappers=[
+            ("dispatch_decode_integral", f"dispatch_decode_integral<{args}>")
+        ],
+    )
+
+
+def dispatch_decode_integral(
+    topk_ids: torch.Tensor,
+    global_counts: torch.Tensor,
+    log2phy_map: torch.Tensor,
+    *,
+    num_physical: int,
+    num_gpus: int,
+    num_replicated: int,
+) -> torch.Tensor:
+    """Assign decode experts integrally and map top-k ids in one CUDA launch."""
+    if not topk_ids.is_cuda:
+        raise RuntimeError(
+            "Greedy decode dispatch requires CUDA tensors; got topk_ids on "
+            f"{topk_ids.device}."
+        )
+    original_shape = topk_ids.shape
+    flat_ids = topk_ids.reshape(-1).contiguous().to(torch.int32)
+    num_logical, max_copies = log2phy_map.shape
+    assert global_counts.shape == (num_logical,)
+    assert global_counts.dtype == torch.float32
+    assert log2phy_map.dtype == torch.int64
+    assert num_physical % num_gpus == 0
+
+    out = torch.empty(flat_ids.shape[0], dtype=torch.int32, device=topk_ids.device)
+    module = _dispatch_decode_integral_module(
+        num_logical,
+        max_copies,
+        num_physical,
+        num_gpus,
+        num_replicated,
+        DISPATCH_BLOCK_DIM,
+    )
+    module.dispatch_decode_integral(
+        out,
+        flat_ids,
+        global_counts,
+        log2phy_map.contiguous(),
+    )
+    return out.view(original_shape).to(topk_ids.dtype)
+
+
+def dispatch_decode_integral_torch_reference(
+    topk_ids: torch.Tensor,
+    global_counts: torch.Tensor,
+    log2phy_map: torch.Tensor,
+    *,
+    num_physical: int,
+    num_gpus: int,
+) -> torch.Tensor:
+    """CPU/CUDA reference for the integral decode assignment."""
+    num_logical, max_copies = log2phy_map.shape
+    physical_per_gpu = num_physical // num_gpus
+    fixed_active_load = [0] * num_gpus
+    fixed_token_load = [0] * num_gpus
+    chosen = [int(log2phy_map[logical, 0]) for logical in range(num_logical)]
+    replicated = []
+
+    for logical in range(num_logical):
+        count = int(global_counts[logical])
+        if count <= 0:
+            continue
+        if max_copies == 1 or int(log2phy_map[logical, 1]) < 0:
+            rank = chosen[logical] // physical_per_gpu
+            fixed_active_load[rank] += 1
+            fixed_token_load[rank] += count
+        else:
+            replicated.append(logical)
+
+    replicated.sort(key=lambda logical: -int(global_counts[logical]))
+
+    minimum_capacity = max(fixed_active_load)
+    for capacity in range(
+        minimum_capacity,
+        minimum_capacity + len(replicated) + 1,
+    ):
+        active_load = fixed_active_load.copy()
+        token_load = fixed_token_load.copy()
+        replicated_rank = [-1] * len(replicated)
+        feasible = True
+
+        for root, root_logical in enumerate(replicated):
+            eligible = []
+            for physical_tensor in log2phy_map[root_logical]:
+                physical = int(physical_tensor)
+                if physical < 0:
+                    break
+                eligible.append(physical // physical_per_gpu)
+            eligible = sorted(
+                set(eligible),
+                key=lambda rank: (token_load[rank], rank),
+            )
+
+            queue = list(eligible)
+            visited = set(eligible)
+            parent_expert = {rank: root for rank in eligible}
+            parent_rank = {rank: -1 for rank in eligible}
+            free_rank = -1
+            queue_head = 0
+
+            while queue_head < len(queue):
+                rank = queue[queue_head]
+                queue_head += 1
+                if active_load[rank] < capacity:
+                    free_rank = rank
+                    break
+                for expert in range(root):
+                    if replicated_rank[expert] != rank:
+                        continue
+                    logical = replicated[expert]
+                    for physical_tensor in log2phy_map[logical]:
+                        physical = int(physical_tensor)
+                        if physical < 0:
+                            break
+                        alternate = physical // physical_per_gpu
+                        if alternate in visited:
+                            continue
+                        visited.add(alternate)
+                        parent_expert[alternate] = expert
+                        parent_rank[alternate] = rank
+                        queue.append(alternate)
+
+            if free_rank < 0:
+                feasible = False
+                break
+
+            destination = free_rank
+            while destination >= 0:
+                expert = parent_expert[destination]
+                old_rank = replicated_rank[expert]
+                count = int(global_counts[replicated[expert]])
+                if old_rank >= 0:
+                    active_load[old_rank] -= 1
+                    token_load[old_rank] -= count
+                replicated_rank[expert] = destination
+                active_load[destination] += 1
+                token_load[destination] += count
+                destination = parent_rank[destination]
+
+        if not feasible:
+            continue
+
+        for expert, logical in enumerate(replicated):
+            assigned_rank = replicated_rank[expert]
+            for physical_tensor in log2phy_map[logical]:
+                physical = int(physical_tensor)
+                if physical < 0:
+                    break
+                if physical // physical_per_gpu == assigned_rank:
+                    chosen[logical] = physical
+                    break
+        break
+
+    chosen_tensor = torch.tensor(
+        chosen,
+        dtype=topk_ids.dtype,
+        device=topk_ids.device,
+    )
+    return chosen_tensor[topk_ids.long()]
+
+
 def dispatch_probability_torch_reference(
     topk_ids: torch.Tensor,
     log2phy_prob: torch.Tensor,

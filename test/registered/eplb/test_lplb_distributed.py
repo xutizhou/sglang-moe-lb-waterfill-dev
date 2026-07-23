@@ -244,6 +244,8 @@ def _worker_main(local_rank: int, world_size: int):
         clear_global_lplb_solvers()
         _check_solver_with_empty_rank(local_rank, world_size, device)
         clear_global_lplb_solvers()
+        _check_decode_direct_with_empty_rank(local_rank, world_size, device)
+        clear_global_lplb_solvers()
         _check_all_ranks_empty(local_rank, world_size, device)
         clear_global_lplb_solvers()
         _check_solver_determinism(local_rank, world_size, device)
@@ -366,6 +368,45 @@ def _check_all_ranks_empty(rank: int, world_size: int, device: torch.device):
     assert torch.allclose(
         actual, expected, atol=1e-4, rtol=1e-3
     ), f"rank {rank}: empty-batch output disagrees with all-zero oracle"
+
+
+def _check_decode_direct_with_empty_rank(
+    rank: int,
+    world_size: int,
+    device: torch.device,
+):
+    """The integral decode path must include an empty DP-attention rank."""
+    from sglang.kernels.ops.lplb.cuda_solver import (
+        dispatch_decode_integral_torch_reference,
+    )
+
+    solver, _, log2phy, _ = _build_solver()
+    rank0_topk = torch.tensor(
+        [[0, 1], [0, 2], [3, 0], [0, 1]],
+        dtype=torch.int32,
+        device=device,
+    )
+    if rank == 0:
+        topk_ids = rank0_topk
+    else:
+        topk_ids = torch.empty((0, TOPK), dtype=torch.int32, device=device)
+
+    actual = solver.solve_decode_active_experts(topk_ids)
+    expected_counts = torch.bincount(
+        rank0_topk.flatten().long(),
+        minlength=NUM_LOGICAL,
+    ).float()
+    expected = dispatch_decode_integral_torch_reference(
+        topk_ids,
+        expected_counts,
+        log2phy.to(device),
+        num_physical=NUM_PHY,
+        num_gpus=world_size,
+    )
+    assert torch.equal(actual, expected), (
+        f"rank {rank}: integral decode output disagrees with global-count "
+        f"reference ({(actual != expected).sum().item()} mismatches)"
+    )
 
 
 def _check_solver_determinism(rank: int, world_size: int, device: torch.device):
