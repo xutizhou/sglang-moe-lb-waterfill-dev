@@ -77,6 +77,8 @@ def topk_ids_logical_to_physical(
     topk_ids: torch.Tensor,
     info: Optional[ExpertLocationDispatchInfo],
     log2phy_prob: Optional[torch.Tensor] = None,
+    *,
+    minimize_active_experts: bool = False,
 ) -> torch.Tensor:
     if info is None:
         return topk_ids
@@ -90,6 +92,10 @@ def topk_ids_logical_to_physical(
             raise RuntimeError(
                 "ep_dispatch_algorithm='lp' but log2phy_prob is None at dispatch "
                 f"time (topk_ids.shape={tuple(topk_ids.shape)})."
+            )
+        if minimize_active_experts:
+            return _topk_ids_logical_to_physical_active_experts(
+                topk_ids, info, log2phy_prob
             )
         return _topk_ids_logical_to_physical_probability(topk_ids, info, log2phy_prob)
     raise NotImplementedError(f"Unknown algorithm {info.ep_dispatch_algorithm}")
@@ -143,3 +149,50 @@ def _topk_ids_logical_to_physical_probability(
     return cuda_solver.dispatch_probability(
         topk_ids, log2phy_prob, info.partial_logical_to_all_physical_map
     )
+
+
+def _topk_ids_logical_to_physical_active_experts(
+    topk_ids: torch.Tensor,
+    info: ExpertLocationDispatchInfo,
+    log2phy_prob: torch.Tensor,
+) -> torch.Tensor:
+    """Co-locate one logical expert's decode tokens on a single replica.
+
+    Probability sampling is appropriate for token-load balancing, but it can
+    activate several physical copies of the same logical expert in one decode
+    chunk. Decode instead rounds each logical expert's LP row once and reuses
+    that physical choice for every occurrence in ``topk_ids``.
+    """
+    if not topk_ids.is_cuda:
+        raise RuntimeError(
+            "Active-expert dispatch requires CUDA tensors; got topk_ids on "
+            f"{topk_ids.device}."
+        )
+    from sglang.kernels.ops.lplb import cuda_solver
+
+    return cuda_solver.dispatch_active_experts(
+        topk_ids,
+        log2phy_prob,
+        info.partial_logical_to_all_physical_map,
+    )
+
+
+def _topk_ids_logical_to_physical_active_experts_torch_reference(
+    topk_ids: torch.Tensor,
+    info: ExpertLocationDispatchInfo,
+    log2phy_prob: torch.Tensor,
+) -> torch.Tensor:
+    """Torch reference for deterministic active-expert dispatch."""
+    log2phy_map = info.partial_logical_to_all_physical_map
+    valid = log2phy_map >= 0
+    scores = torch.where(
+        valid,
+        log2phy_prob,
+        torch.full_like(log2phy_prob, -torch.inf),
+    )
+    chosen_copy = scores.argmax(dim=-1, keepdim=True)
+    chosen_physical = log2phy_map.gather(1, chosen_copy).squeeze(1)
+    physical_topk_ids = chosen_physical[topk_ids.long()]
+    if physical_topk_ids.dtype != topk_ids.dtype:
+        physical_topk_ids = physical_topk_ids.to(topk_ids.dtype)
+    return physical_topk_ids

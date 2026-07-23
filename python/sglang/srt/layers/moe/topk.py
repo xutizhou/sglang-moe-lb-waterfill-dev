@@ -487,6 +487,7 @@ class TopK(MultiPlatformOp):
             topk_config=self.topk_config,
             num_token_non_padded=num_token_non_padded,
             expert_location_dispatch_info=expert_location_dispatch_info,
+            lplb_is_decode=bool(waterfill_is_decode),
         )
         return self._apply_waterfill(
             topk_output,
@@ -556,6 +557,7 @@ class TopK(MultiPlatformOp):
                     topk_config=self.topk_config,
                     num_token_non_padded=num_token_non_padded,
                     expert_location_dispatch_info=expert_location_dispatch_info,
+                    lplb_is_decode=bool(waterfill_is_decode),
                 )
         return self._apply_waterfill(
             topk_output,
@@ -579,6 +581,7 @@ class TopK(MultiPlatformOp):
             topk_config=self.topk_config,
             num_token_non_padded=num_token_non_padded,
             expert_location_dispatch_info=expert_location_dispatch_info,
+            lplb_is_decode=bool(waterfill_is_decode),
         )
         return self._apply_waterfill(
             topk_output,
@@ -633,7 +636,8 @@ class TopK(MultiPlatformOp):
                         (0, self.topk_config.top_k),
                         dtype=torch.int32,
                         device=device,
-                    )
+                    ),
+                    minimize_active_experts=bool(waterfill_is_decode),
                 )
         topk = self.topk_config.top_k - self.topk_config.num_fused_shared_experts
         with use_symmetric_memory(
@@ -1857,6 +1861,7 @@ def _post_process_topk_ids(
     layer_id: int,
     num_token_non_padded: Optional[torch.Tensor] = None,
     expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
+    lplb_is_decode: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     num_fused_shared_experts = topk_config.num_fused_shared_experts
     use_per_rank_shared_slots = has_per_rank_fused_shared_slots(
@@ -1880,11 +1885,17 @@ def _post_process_topk_ids(
 
             lplb_solver = get_global_lplb_solver(layer_id)
             if lplb_solver is not None:
-                log2phy_prob = lplb_solver.solve(topk_ids)
+                log2phy_prob = lplb_solver.solve(
+                    topk_ids,
+                    minimize_active_experts=lplb_is_decode,
+                )
 
         if log2phy_prob is not None:
             topk_ids = topk_ids_logical_to_physical(
-                topk_ids, expert_location_dispatch_info, log2phy_prob
+                topk_ids,
+                expert_location_dispatch_info,
+                log2phy_prob,
+                minimize_active_experts=lplb_is_decode,
             )
             _mask_topk_ids_padded_region(topk_ids, num_token_non_padded)
         elif use_per_rank_shared_slots:
@@ -2023,6 +2034,7 @@ def select_experts(
     layer_id: Optional[int] = None,
     num_token_non_padded: Optional[torch.Tensor] = None,
     expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
+    lplb_is_decode: bool = False,
 ) -> StandardTopKOutput:
     top_k = topk_config.top_k
     use_grouped_topk = topk_config.use_grouped_topk
@@ -2244,6 +2256,7 @@ def select_experts(
         num_token_non_padded=num_token_non_padded,
         layer_id=layer_id,
         expert_location_dispatch_info=expert_location_dispatch_info,
+        lplb_is_decode=lplb_is_decode,
     )
 
     get_global_expert_distribution_recorder().on_select_experts(

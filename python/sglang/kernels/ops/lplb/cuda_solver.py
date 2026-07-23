@@ -258,6 +258,44 @@ def dispatch_probability(
     return out.view(original_shape).to(topk_ids.dtype)
 
 
+@cache_once
+def _dispatch_active_experts_module(max_copies: int, block_dim: int) -> Module:
+    args = make_cpp_args(max_copies, block_dim)
+    return load_jit(
+        "lplb_dispatch_active_experts",
+        *args,
+        cuda_files=["lplb/dispatch_active_experts.cuh"],
+        cuda_wrappers=[("dispatch_active_experts", f"dispatch_active_experts<{args}>")],
+    )
+
+
+def dispatch_active_experts(
+    topk_ids: torch.Tensor,
+    log2phy_prob: torch.Tensor,
+    log2phy_map: torch.Tensor,
+) -> torch.Tensor:
+    """Map every occurrence of a logical expert to one deterministic replica."""
+    if not topk_ids.is_cuda:
+        raise RuntimeError(
+            "Active-expert dispatch requires CUDA tensors; got topk_ids on "
+            f"{topk_ids.device}."
+        )
+    original_shape = topk_ids.shape
+    flat_ids = topk_ids.reshape(-1).contiguous().to(torch.int32)
+    num_logical, max_copies = log2phy_prob.shape
+    assert log2phy_map.shape == (num_logical, max_copies)
+    assert log2phy_map.dtype == torch.int64
+    out = torch.empty(flat_ids.shape[0], dtype=torch.int32, device=topk_ids.device)
+    module = _dispatch_active_experts_module(max_copies, DISPATCH_BLOCK_DIM)
+    module.dispatch_active_experts(
+        out,
+        flat_ids,
+        log2phy_prob,
+        log2phy_map.contiguous(),
+    )
+    return out.view(original_shape).to(topk_ids.dtype)
+
+
 def dispatch_probability_torch_reference(
     topk_ids: torch.Tensor,
     log2phy_prob: torch.Tensor,

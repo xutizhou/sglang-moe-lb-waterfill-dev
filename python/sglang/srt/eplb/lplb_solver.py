@@ -206,7 +206,12 @@ class LPLBSolver:
             log2phy.shape, dtype=torch.float32, device=device
         )
 
-    def solve(self, topk_ids: torch.Tensor) -> torch.Tensor:
+    def solve(
+        self,
+        topk_ids: torch.Tensor,
+        *,
+        minimize_active_experts: bool = False,
+    ) -> torch.Tensor:
         """
         Full LPLB pipeline: count -> all-reduce -> LP solve -> return log2phy_prob.
 
@@ -218,6 +223,11 @@ class LPLBSolver:
         Args:
             topk_ids: (num_tokens, topk) int32 tensor of logical expert IDs.
                       Can be empty (shape (0, topk)) for idle ranks.
+            minimize_active_experts: Treat each active logical expert as one
+                unit of load instead of using its routed-token count. Decode
+                dispatch pairs this with one-replica-per-logical-expert
+                assignment so the LP objective models physical expert
+                activation rather than token throughput.
 
         Returns:
             log2phy_prob: (num_logical, max_copies) float32 probability tensor.
@@ -250,6 +260,12 @@ class LPLBSolver:
         global_counts = local_counts.float()
         if self.ep_group is not None:
             global_counts = self.ep_group.all_reduce(global_counts)
+
+        if minimize_active_experts:
+            # The all-reduce must happen before the threshold so an expert
+            # selected on any DP-attention rank contributes exactly one unit
+            # to the global decode objective.
+            global_counts = (global_counts > 0).to(global_counts.dtype)
 
         # Step 3: Run LP solver
         return self._solve(global_counts)
