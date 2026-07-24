@@ -199,6 +199,98 @@ def test_lplb_distributed_two_rank():
     )
 
 
+@pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.cuda.device_count() < 4,
+    reason="This test requires at least 4 CUDA devices",
+)
+def test_decode_p2p_four_rank():
+    """Exercise the compact active-set barrier at the production EP size."""
+    torch.multiprocessing.spawn(
+        _decode_p2p_four_rank_worker,
+        args=(4,),
+        nprocs=4,
+    )
+
+
+def _decode_p2p_four_rank_worker(local_rank: int, world_size: int):
+    from sglang.srt.server_args import (
+        ServerArgs,
+        set_global_server_args_for_scheduler,
+    )
+
+    set_global_server_args_for_scheduler(ServerArgs(model_path="dummy"))
+    device = torch.device(f"cuda:{local_rank}")
+    torch.cuda.set_device(device)
+    torch.set_default_device(device)
+    update_environment_variables(
+        {
+            "RANK": str(local_rank),
+            "LOCAL_RANK": str(local_rank),
+            "WORLD_SIZE": str(world_size),
+            "MASTER_ADDR": "localhost",
+            "MASTER_PORT": "12349",
+        }
+    )
+    init_distributed_environment(
+        world_size=world_size, rank=local_rank, local_rank=local_rank
+    )
+    initialize_model_parallel(
+        tensor_model_parallel_size=world_size,
+        expert_model_parallel_size=world_size,
+    )
+
+    try:
+        from sglang.kernels.ops.lplb.cuda_solver import (
+            dispatch_decode_integral_torch_reference,
+        )
+        from sglang.srt.distributed.parallel_state import get_moe_ep_group
+        from sglang.srt.eplb.lplb_solver import LPLBSolver
+
+        phy2log = torch.tensor(
+            [0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3],
+            dtype=torch.int64,
+        )
+        log2phy = torch.full((8, 2), -1, dtype=torch.int64)
+        for physical, logical in enumerate(phy2log.tolist()):
+            slot = int((log2phy[logical] >= 0).sum())
+            log2phy[logical, slot] = physical
+        num_valid = (log2phy >= 0).sum(dim=1)
+        solver = LPLBSolver(
+            phy2log=phy2log.to(device),
+            log2phy=log2phy.to(device),
+            num_gpus=world_size,
+            ep_group=get_moe_ep_group(),
+            logical_to_all_physical_map_num_valid=num_valid.to(device),
+        )
+        solver.initialize_decode_p2p()
+
+        local_topk = torch.tensor(
+            [[local_rank, (local_rank + 1) % 8], [0, 7]],
+            dtype=torch.int32,
+            device=device,
+        )
+        global_active = torch.zeros(8, dtype=torch.float32)
+        global_active[[0, 1, 2, 3, 4, 7]] = 1
+        expected = dispatch_decode_integral_torch_reference(
+            local_topk.cpu(),
+            global_active,
+            log2phy,
+            num_physical=12,
+            num_gpus=world_size,
+        ).to(device)
+        for _ in range(16):
+            actual = solver.solve_decode_active_experts_p2p(local_topk)
+            assert torch.equal(actual, expected)
+    finally:
+        from sglang.srt.distributed.parallel_state import (
+            destroy_distributed_environment,
+            destroy_model_parallel,
+        )
+
+        destroy_model_parallel()
+        destroy_distributed_environment()
+
+
 def _worker_main(local_rank: int, world_size: int):
     """Per-rank entry point under torch.multiprocessing.spawn."""
     # Inject minimal ServerArgs before any LPLB module reads the global state.
