@@ -190,13 +190,50 @@ def test_empty_decode_participation_matches_policy(monkeypatch):
 
     for policy, expected in (
         ("tokens", "tokens"),
-        ("active_experts", "active_experts"),
+        ("active_experts", None),
         ("static", None),
     ):
         calls.clear()
         topk.lplb_decode_load_metric = policy
         topk.empty_topk_output(torch.device("cpu"), layer_id=0, is_decode=True)
         assert calls == ([] if expected is None else [(expected, (0, 2))])
+
+
+def test_decode_active_experts_skips_all_reduce(monkeypatch):
+    from sglang.kernels.ops.lplb import torch_solver
+
+    monkeypatch.setattr(torch_solver, "warmup", lambda *_args, **_kwargs: None)
+    phy2log = torch.tensor([0, 1, 2, 3, 0, 1], dtype=torch.int64)
+    log2phy = torch.tensor(
+        [
+            [0, 4],
+            [1, 5],
+            [2, -1],
+            [3, -1],
+        ],
+        dtype=torch.int64,
+    )
+
+    class FailOnCollective:
+        def all_reduce(self, _tensor):
+            raise AssertionError("decode active-expert path called all_reduce")
+
+    solver = LPLBSolver(
+        phy2log,
+        log2phy,
+        num_gpus=2,
+        ep_group=FailOnCollective(),
+    )
+    topk_ids = torch.tensor([[0, 1], [1, 3], [0, 2]], dtype=torch.int32)
+
+    actual = solver.solve_decode_active_experts(topk_ids)
+    expected = solver.decode_global_physical[topk_ids]
+    torch.testing.assert_close(actual, expected)
+
+    # One globally consistent physical copy per logical expert, independent
+    # of source-rank-local token counts.
+    for logical in topk_ids.unique():
+        assert actual[topk_ids == logical].unique().numel() == 1
 
 
 def test_decode_dispatch_co_locates_each_logical_expert():

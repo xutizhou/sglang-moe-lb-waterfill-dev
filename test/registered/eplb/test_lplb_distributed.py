@@ -375,12 +375,8 @@ def _check_decode_direct_with_empty_rank(
     world_size: int,
     device: torch.device,
 ):
-    """The integral decode path must include an empty DP-attention rank."""
-    from sglang.kernels.ops.lplb.cuda_solver import (
-        dispatch_decode_integral_torch_reference,
-    )
-
-    solver, _, log2phy, _ = _build_solver()
+    """Decode assignment must not require empty-rank participation."""
+    solver, _, _, _ = _build_solver()
     rank0_topk = torch.tensor(
         [[0, 1], [0, 2], [3, 0], [0, 1]],
         dtype=torch.int32,
@@ -392,19 +388,9 @@ def _check_decode_direct_with_empty_rank(
         topk_ids = torch.empty((0, TOPK), dtype=torch.int32, device=device)
 
     actual = solver.solve_decode_active_experts(topk_ids)
-    expected_counts = torch.bincount(
-        rank0_topk.flatten().long(),
-        minlength=NUM_LOGICAL,
-    ).float()
-    expected = dispatch_decode_integral_torch_reference(
-        topk_ids,
-        expected_counts,
-        log2phy.to(device),
-        num_physical=NUM_PHY,
-        num_gpus=world_size,
-    )
+    expected = solver.decode_global_physical[topk_ids]
     assert torch.equal(actual, expected), (
-        f"rank {rank}: integral decode output disagrees with global-count "
+        f"rank {rank}: communication-free decode output disagrees with fixed "
         f"reference ({(actual != expected).sum().item()} mismatches)"
     )
 

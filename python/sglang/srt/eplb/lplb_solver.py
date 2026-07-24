@@ -222,6 +222,32 @@ class LPLBSolver:
             .contiguous()
         )
 
+        # Decode cannot inspect the full DP-attention chunk without an EP
+        # collective: every rank only owns its local routed tokens.  Build one
+        # globally consistent integral assignment at initialization instead.
+        # Treating every logical expert as active gives an exact min-max
+        # assignment over the complete expert set.  At runtime all ranks use
+        # the same lookup table, so every occurrence of a logical expert lands
+        # on one physical replica without a count/all-reduce/online solve.
+        from sglang.kernels.ops.lplb.cuda_solver import (
+            dispatch_decode_integral_torch_reference,
+        )
+
+        decode_logical_ids_cpu = torch.arange(
+            self.num_logical, dtype=torch.int32, device="cpu"
+        )
+        self.decode_global_physical = (
+            dispatch_decode_integral_torch_reference(
+                decode_logical_ids_cpu,
+                torch.ones(self.num_logical, dtype=torch.float32, device="cpu"),
+                self.log2phy.cpu(),
+                num_physical=self.num_phy,
+                num_gpus=self.num_gpus,
+            )
+            .to(device=device, non_blocking=True)
+            .contiguous()
+        )
+
         # Pre-JIT-compile the fused IPM kernel for this (NC, NV) shape so the
         # 20-40s compile cost happens once at startup rather than on the first
         # real request. No-op when the fused backend is unavailable.
@@ -294,23 +320,13 @@ class LPLBSolver:
         return self._solve(global_counts)
 
     def solve_decode_active_experts(self, topk_ids: torch.Tensor) -> torch.Tensor:
-        """Assign active decode experts directly to physical replicas.
+        """Map decode experts through the communication-free assignment.
 
-        Unlike the relaxed LP path, this returns physical top-k ids. The fused
-        CUDA kernel rounds the assignment integrally, uses token count only as
-        a secondary tie breaker, and maps the ids in the same launch.
+        The assignment is computed once in ``__init__`` and is identical on
+        every EP rank.  The decode hot path is therefore a single device
+        lookup: no token counting, EP all-reduce, or online integral solve.
         """
-        global_counts = self._count_and_all_reduce(topk_ids)
-
-        from sglang.kernels.ops.lplb import cuda_solver
-
-        return cuda_solver.dispatch_decode_integral(
-            topk_ids,
-            global_counts,
-            self.decode_physical_by_rank,
-            self.decode_rank_mask,
-            self.decode_log_replicated,
-        )
+        return self.decode_global_physical[topk_ids]
 
     def _count_and_all_reduce(self, topk_ids: torch.Tensor) -> torch.Tensor:
         """Return global logical-expert token counts as float32."""

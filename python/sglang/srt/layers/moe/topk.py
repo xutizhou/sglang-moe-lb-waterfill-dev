@@ -647,9 +647,10 @@ class TopK(MultiPlatformOp):
                     dtype=torch.int32,
                     device=device,
                 )
-                if self.lplb_decode_load_metric == "active_experts" and bool(is_decode):
-                    lplb_solver.solve_decode_active_experts(empty_topk_ids)
-                elif not (self.lplb_decode_load_metric == "static" and bool(is_decode)):
+                decode_without_collective = bool(is_decode) and (
+                    self.lplb_decode_load_metric in ("active_experts", "static")
+                )
+                if not decode_without_collective:
                     lplb_solver.solve(empty_topk_ids)
         topk = self.topk_config.top_k - self.topk_config.num_fused_shared_experts
         with use_symmetric_memory(
