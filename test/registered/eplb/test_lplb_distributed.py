@@ -255,14 +255,18 @@ def _decode_p2p_four_rank_worker(local_rank: int, world_size: int):
             slot = int((log2phy[logical] >= 0).sum())
             log2phy[logical, slot] = physical
         num_valid = (log2phy >= 0).sum(dim=1)
-        solver = LPLBSolver(
-            phy2log=phy2log.to(device),
-            log2phy=log2phy.to(device),
-            num_gpus=world_size,
-            ep_group=get_moe_ep_group(),
-            logical_to_all_physical_map_num_valid=num_valid.to(device),
-        )
-        solver.initialize_decode_p2p()
+        solvers = [
+            LPLBSolver(
+                phy2log=phy2log.to(device),
+                log2phy=log2phy.to(device),
+                num_gpus=world_size,
+                ep_group=get_moe_ep_group(),
+                logical_to_all_physical_map_num_valid=num_valid.to(device),
+            )
+            for _ in range(8)
+        ]
+        for solver in solvers:
+            solver.initialize_decode_p2p()
 
         local_topk = torch.tensor(
             [[local_rank, (local_rank + 1) % 8], [0, 7]],
@@ -279,8 +283,9 @@ def _decode_p2p_four_rank_worker(local_rank: int, world_size: int):
             num_gpus=world_size,
         ).to(device)
         for _ in range(16):
-            actual = solver.solve_decode_active_experts_p2p(local_topk)
-            assert torch.equal(actual, expected)
+            for solver in solvers:
+                actual = solver.solve_decode_active_experts_p2p(local_topk)
+                assert torch.equal(actual, expected)
     finally:
         from sglang.srt.distributed.parallel_state import (
             destroy_distributed_environment,
