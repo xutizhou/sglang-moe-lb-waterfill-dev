@@ -61,6 +61,8 @@ class ExpertLocationMetadata:
     ep_size: int
     # (layers, num_logical_experts)
     logical_to_rank_dispatch_physical_map: Optional[torch.Tensor]
+    # (layers, num_logical_experts)
+    logical_to_global_dispatch_physical_map: Optional[torch.Tensor]
 
     # -------------------------------- properties ------------------------------------
 
@@ -179,6 +181,11 @@ class ExpertLocationMetadata:
             logical_count = torch.tensor(logical_count)
         if len(logical_count.shape) == 2:
             logical_count = logical_count.unsqueeze(0)
+        decode_activation_frequency = (
+            (logical_count > 0).to(torch.float32).mean(dim=0)
+            if logical_count.dim() == 3
+            else None
+        )
         logical_count = logical_count.to(server_args.device)
 
         common = ExpertLocationMetadata._init_common(server_args, model_config)
@@ -215,6 +222,7 @@ class ExpertLocationMetadata:
             logical_to_all_physical_map=logical_to_all_physical_map.to(
                 server_args.device
             ),
+            decode_activation_frequency=decode_activation_frequency,
         )
 
     @staticmethod
@@ -265,6 +273,7 @@ class ExpertLocationMetadata:
         physical_to_logical_map: torch.Tensor,
         logical_to_all_physical_map: torch.Tensor,
         moe_ep_rank: Optional[int] = None,
+        decode_activation_frequency: Optional[torch.Tensor] = None,
     ):
         _, num_physical_experts = physical_to_logical_map.shape
 
@@ -300,6 +309,16 @@ class ExpertLocationMetadata:
                 if server_args.ep_dispatch_algorithm in ("static", "lp")
                 else None
             ),
+            logical_to_global_dispatch_physical_map=(
+                compute_logical_to_global_dispatch_physical_map(
+                    logical_to_all_physical_map=logical_to_all_physical_map,
+                    num_physical_experts=num_physical_experts,
+                    ep_size=ep_size,
+                    decode_activation_frequency=decode_activation_frequency,
+                )
+                if server_args.ep_dispatch_algorithm == "lp"
+                else None
+            ),
         )
 
     # -------------------------------- mutation ------------------------------------
@@ -321,6 +340,7 @@ class ExpertLocationMetadata:
             "logical_to_all_physical_map_cpu",
             "logical_to_all_physical_map_num_valid",
             "logical_to_rank_dispatch_physical_map",
+            "logical_to_global_dispatch_physical_map",
         ]:
             other_field = getattr(other, field)
             self_field = getattr(self, field)
@@ -667,6 +687,58 @@ def compute_logical_to_rank_dispatch_physical_map(
     assert torch.all(logical_to_rank_dispatch_physical_map != -1)
 
     return logical_to_rank_dispatch_physical_map[ep_rank, :, :].to(device)
+
+
+def compute_logical_to_global_dispatch_physical_map(
+    logical_to_all_physical_map: torch.Tensor,
+    num_physical_experts: int,
+    ep_size: int,
+    decode_activation_frequency: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Build one balanced replica assignment shared by every source rank.
+
+    The primary objective remains the exact minimum maximum number of assigned
+    logical experts per rank. Historical per-chunk activation frequency, when
+    available, is used as the secondary load-balancing weight.
+    """
+    from sglang.kernels.ops.lplb.cuda_solver import (
+        dispatch_decode_integral_torch_reference,
+    )
+
+    device = logical_to_all_physical_map.device
+    logical_to_all_physical_map_cpu = logical_to_all_physical_map.cpu()
+    num_layers, num_logical_experts, _ = logical_to_all_physical_map_cpu.shape
+    if decode_activation_frequency is not None:
+        decode_activation_frequency = decode_activation_frequency.cpu()
+        if decode_activation_frequency.shape != (num_layers, num_logical_experts):
+            raise ValueError(
+                "decode_activation_frequency must have shape "
+                f"{(num_layers, num_logical_experts)}, got "
+                f"{tuple(decode_activation_frequency.shape)}"
+            )
+
+    logical_ids = torch.arange(num_logical_experts, dtype=torch.int32)
+    assignments = []
+    for layer_id in range(num_layers):
+        if decode_activation_frequency is None:
+            assignment_weight = torch.ones(num_logical_experts, dtype=torch.float32)
+        else:
+            # The integral reference uses integer token load as its secondary
+            # tie breaker. Scale probabilities while keeping every expert
+            # active in the primary exact-capacity assignment.
+            assignment_weight = (
+                decode_activation_frequency[layer_id].mul(1_000_000).round().add(1)
+            )
+        assignments.append(
+            dispatch_decode_integral_torch_reference(
+                logical_ids,
+                assignment_weight,
+                logical_to_all_physical_map_cpu[layer_id],
+                num_physical=num_physical_experts,
+                num_gpus=ep_size,
+            )
+        )
+    return torch.stack(assignments).to(device=device, non_blocking=True)
 
 
 def _logical_to_all_physical_raw(

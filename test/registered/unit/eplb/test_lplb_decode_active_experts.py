@@ -135,6 +135,9 @@ def test_static_decode_skips_online_lplb(monkeypatch):
         partial_logical_to_rank_dispatch_physical_map=torch.tensor(
             [4, 1, 6], dtype=torch.int64
         ),
+        partial_logical_to_global_dispatch_physical_map=torch.tensor(
+            [0, 1, 2], dtype=torch.int32
+        ),
         partial_logical_to_all_physical_map=torch.tensor(
             [[0, 4], [1, -1], [2, 6]], dtype=torch.int64
         ),

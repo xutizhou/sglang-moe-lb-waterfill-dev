@@ -1894,15 +1894,20 @@ def _post_process_topk_ids(
             == "lp"
             and lplb_decode_load_metric != "static"
         ):
-            from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
-
-            lplb_solver = get_global_lplb_solver(layer_id)
-            if lplb_solver is not None:
-                if lplb_decode_load_metric == "active_experts":
-                    lplb_physical_topk_ids = lplb_solver.solve_decode_active_experts(
-                        topk_ids
+            if lplb_decode_load_metric == "active_experts":
+                global_map = (
+                    expert_location_dispatch_info.partial_logical_to_global_dispatch_physical_map
+                )
+                if global_map is None:
+                    raise RuntimeError(
+                        "Active-expert decode requires a global fixed replica map."
                     )
-                elif lplb_decode_load_metric != "static":
+                lplb_physical_topk_ids = global_map[topk_ids]
+            else:
+                from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
+
+                lplb_solver = get_global_lplb_solver(layer_id)
+                if lplb_solver is not None:
                     log2phy_prob = lplb_solver.solve(topk_ids)
 
         use_static_lplb_decode = (
