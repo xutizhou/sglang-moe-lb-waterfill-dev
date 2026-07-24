@@ -2250,26 +2250,11 @@ class ServerArgs:
         Literal["tokens", "active_experts", "static"],
         "Decode policy used with --ep-dispatch-algorithm=lp. 'tokens' runs "
         "the regular token-count LPLB solver, 'active_experts' minimizes the "
-        "maximum number of activated experts per rank, and 'static' skips "
-        "online decode balancing and uses the initialized fixed replica map.",
+        "maximum number of activated experts per rank using a compact GPU P2P "
+        "active-set exchange, and 'static' skips online decode balancing and "
+        "uses the initialized fixed replica map.",
         NS("exec.moe"),
     ] = "tokens"
-    lplb_decode_global_expert_count: A[
-        int,
-        "With --lplb-decode-load-metric=active_experts, globally co-locate at "
-        "most this many redundant logical experts per layer and keep the rest "
-        "on the source-rank-local replica map. -1 co-locates every redundant "
-        "logical expert and 0 is equivalent to static decode dispatch.",
-        NS("exec.moe"),
-    ] = 16
-    lplb_decode_expert_distribution: A[
-        Optional[str],
-        "Optional expert-distribution .pt file used only to rank redundant "
-        "logical experts for active-expert decode dispatch. This keeps EPLB "
-        "placement based on --init-expert-location token counts while decode "
-        "uses statistics collected from a representative decode workload.",
-        NS("exec.moe"),
-    ] = None
     init_expert_location: A[str, "Initial location of EP experts.", NS("exec.moe")] = (
         "trivial"
     )

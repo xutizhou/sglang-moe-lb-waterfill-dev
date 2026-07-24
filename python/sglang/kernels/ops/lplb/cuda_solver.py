@@ -259,44 +259,6 @@ def dispatch_probability(
 
 
 @cache_once
-def _dispatch_active_experts_module(max_copies: int, block_dim: int) -> Module:
-    args = make_cpp_args(max_copies, block_dim)
-    return load_jit(
-        "lplb_dispatch_active_experts",
-        *args,
-        cuda_files=["lplb/dispatch_active_experts.cuh"],
-        cuda_wrappers=[("dispatch_active_experts", f"dispatch_active_experts<{args}>")],
-    )
-
-
-def dispatch_active_experts(
-    topk_ids: torch.Tensor,
-    log2phy_prob: torch.Tensor,
-    log2phy_map: torch.Tensor,
-) -> torch.Tensor:
-    """Map every occurrence of a logical expert to one deterministic replica."""
-    if not topk_ids.is_cuda:
-        raise RuntimeError(
-            "Active-expert dispatch requires CUDA tensors; got topk_ids on "
-            f"{topk_ids.device}."
-        )
-    original_shape = topk_ids.shape
-    flat_ids = topk_ids.reshape(-1).contiguous().to(torch.int32)
-    num_logical, max_copies = log2phy_prob.shape
-    assert log2phy_map.shape == (num_logical, max_copies)
-    assert log2phy_map.dtype == torch.int64
-    out = torch.empty(flat_ids.shape[0], dtype=torch.int32, device=topk_ids.device)
-    module = _dispatch_active_experts_module(max_copies, DISPATCH_BLOCK_DIM)
-    module.dispatch_active_experts(
-        out,
-        flat_ids,
-        log2phy_prob,
-        log2phy_map.contiguous(),
-    )
-    return out.view(original_shape).to(topk_ids.dtype)
-
-
-@cache_once
 def _dispatch_decode_integral_module(
     num_logical: int,
     num_gpus: int,
@@ -315,10 +277,6 @@ def _dispatch_decode_integral_module(
         cuda_files=["lplb/dispatch_decode_integral.cuh"],
         cuda_wrappers=[
             ("dispatch_decode_integral", f"dispatch_decode_integral<{args}>"),
-            (
-                "dispatch_decode_integral_local",
-                f"dispatch_decode_integral_local<{args}>",
-            ),
             (
                 "dispatch_decode_integral_p2p",
                 f"dispatch_decode_integral_p2p<{args}>",
@@ -362,48 +320,6 @@ def dispatch_decode_integral(
         out,
         flat_ids,
         global_counts,
-        physical_by_rank,
-        rank_mask,
-        replicated_logical,
-    )
-    return out.view(original_shape).to(topk_ids.dtype)
-
-
-def dispatch_decode_integral_local(
-    topk_ids: torch.Tensor,
-    physical_by_rank: torch.Tensor,
-    rank_mask: torch.Tensor,
-    replicated_logical: torch.Tensor,
-) -> torch.Tensor:
-    """Assign decode experts from the rank-local active set in one launch.
-
-    This deliberately avoids an EP collective. Each source rank independently
-    balances the experts in its local decode chunk across eligible replicas.
-    """
-    if not topk_ids.is_cuda:
-        raise RuntimeError(
-            "Local greedy decode dispatch requires CUDA tensors; got topk_ids "
-            f"on {topk_ids.device}."
-        )
-    original_shape = topk_ids.shape
-    flat_ids = topk_ids.reshape(-1).contiguous().to(torch.int32)
-    num_logical, num_gpus = physical_by_rank.shape
-    assert physical_by_rank.dtype == torch.int32
-    assert rank_mask.shape == (num_logical,)
-    assert rank_mask.dtype == torch.int32
-    assert replicated_logical.dtype == torch.int32
-    num_replicated = replicated_logical.shape[0]
-
-    out = torch.empty(flat_ids.shape[0], dtype=torch.int32, device=topk_ids.device)
-    module = _dispatch_decode_integral_module(
-        num_logical,
-        num_gpus,
-        num_replicated,
-        DISPATCH_BLOCK_DIM,
-    )
-    module.dispatch_decode_integral_local(
-        out,
-        flat_ids,
         physical_by_rank,
         rank_mask,
         replicated_logical,

@@ -309,12 +309,7 @@ class LPLBSolver:
             flag_handle,
         )
 
-    def solve(
-        self,
-        topk_ids: torch.Tensor,
-        *,
-        minimize_active_experts: bool = False,
-    ) -> torch.Tensor:
+    def solve(self, topk_ids: torch.Tensor) -> torch.Tensor:
         """
         Full LPLB pipeline: count -> all-reduce -> LP solve -> return log2phy_prob.
 
@@ -326,12 +321,6 @@ class LPLBSolver:
         Args:
             topk_ids: (num_tokens, topk) int32 tensor of logical expert IDs.
                       Can be empty (shape (0, topk)) for idle ranks.
-            minimize_active_experts: Treat each active logical expert as one
-                unit of load instead of using its routed-token count. Decode
-                dispatch pairs this with one-replica-per-logical-expert
-                assignment so the LP objective models physical expert
-                activation rather than token throughput.
-
         Returns:
             log2phy_prob: (num_logical, max_copies) float32 probability tensor.
         """
@@ -345,27 +334,8 @@ class LPLBSolver:
         # so we must capture the return value.
         global_counts = self._count_and_all_reduce(topk_ids)
 
-        if minimize_active_experts:
-            # The all-reduce must happen before the threshold so an expert
-            # selected on any DP-attention rank contributes exactly one unit
-            # to the global decode objective.
-            global_counts = (global_counts > 0).to(global_counts.dtype)
-
         # Step 3: Run LP solver
         return self._solve(global_counts)
-
-    def solve_decode_active_experts(self, topk_ids: torch.Tensor) -> torch.Tensor:
-        """Balance one rank-local decode chunk without an EP collective."""
-        from sglang.kernels.ops.lplb.cuda_solver import (
-            dispatch_decode_integral_local,
-        )
-
-        return dispatch_decode_integral_local(
-            topk_ids,
-            self.decode_physical_by_rank,
-            self.decode_rank_mask,
-            self.decode_log_replicated,
-        )
 
     def solve_decode_active_experts_p2p(self, topk_ids: torch.Tensor) -> torch.Tensor:
         """Union active sets with fused GPU P2P and balance replicas globally."""

@@ -30,7 +30,7 @@
 
 namespace {
 
-template <int NUM_LOGICAL, int NUM_GPUS, int NUM_REPLICATED, int BLOCK_DIM, bool COUNT_LOCAL, bool GATHER_P2P>
+template <int NUM_LOGICAL, int NUM_GPUS, int NUM_REPLICATED, int BLOCK_DIM, bool GATHER_P2P>
 __global__ void dispatch_decode_integral_kernel(
     int32_t* __restrict__ out_topk_ids,
     const int32_t* __restrict__ in_topk_ids,
@@ -50,9 +50,10 @@ __global__ void dispatch_decode_integral_kernel(
   __shared__ int logical_counts[NUM_LOGICAL];
   __shared__ int fixed_active_load[NUM_GPUS];
   __shared__ int fixed_token_load[NUM_GPUS];
+  __shared__ uint32_t global_active[ACTIVE_WORDS];
 
   for (int logical = threadIdx.x; logical < NUM_LOGICAL; logical += BLOCK_DIM) {
-    if constexpr (COUNT_LOCAL || GATHER_P2P) {
+    if constexpr (GATHER_P2P) {
       logical_counts[logical] = 0;
     } else {
       logical_counts[logical] = static_cast<int>(global_counts[logical]);
@@ -82,24 +83,22 @@ __global__ void dispatch_decode_integral_kernel(
     // CUDA-graph replay safe and avoids an NCCL/all-reduce launch.
     inkling_ar::grid_system_barrier<NUM_GPUS>(barrier_state, flag_ptrs, rank, 0, /*publish_writes=*/true);
 
-    for (int logical = threadIdx.x; logical < NUM_LOGICAL; logical += BLOCK_DIM) {
-      const int word = logical / 32;
-      const uint32_t bit = 1u << (logical % 32);
+    // Each 32-bit word describes 32 logical experts. Aggregate every peer
+    // word once, rather than issuing the same remote P2P loads independently
+    // for all 32 bits in that word.
+    for (int word = threadIdx.x; word < ACTIVE_WORDS; word += BLOCK_DIM) {
       uint32_t active = 0;
 #pragma unroll
       for (int peer = 0; peer < NUM_GPUS; ++peer) {
         const auto* peer_active = static_cast<const volatile uint32_t*>(active_ptrs[peer]);
         active |= peer_active[word];
       }
-      logical_counts[logical] = (active & bit) != 0;
+      global_active[word] = active;
     }
     __syncthreads();
-  } else if constexpr (COUNT_LOCAL) {
-    for (int idx = threadIdx.x; idx < N; idx += BLOCK_DIM) {
-      const int logical = in_topk_ids[idx];
-      if (logical >= 0) {
-        atomicAdd(&logical_counts[logical], 1);
-      }
+    for (int logical = threadIdx.x; logical < NUM_LOGICAL; logical += BLOCK_DIM) {
+      const uint32_t bit = 1u << (logical % 32);
+      logical_counts[logical] = (global_active[logical / 32] & bit) != 0;
     }
     __syncthreads();
   }
@@ -275,46 +274,12 @@ void dispatch_decode_integral(
   TensorMatcher({NUM_REPLICATED}).with_dtype<int32_t>().with_device<kDLCUDA>(device_).verify(replicated_logical);
 
   const DLDevice device = device_.unwrap();
-  auto kernel = dispatch_decode_integral_kernel<NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, false, false>;
+  auto kernel = dispatch_decode_integral_kernel<NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, false>;
   LaunchKernel(/*grid=*/1, /*block=*/BLOCK_DIM, device)(
       kernel,
       static_cast<int32_t*>(out_topk_ids.data_ptr()),
       static_cast<const int32_t*>(in_topk_ids.data_ptr()),
       static_cast<const float*>(global_counts.data_ptr()),
-      static_cast<const int32_t*>(physical_by_rank.data_ptr()),
-      static_cast<const int32_t*>(rank_mask.data_ptr()),
-      static_cast<const int32_t*>(replicated_logical.data_ptr()),
-      static_cast<int>(N.unwrap()),
-      nullptr,
-      nullptr,
-      nullptr,
-      0u);
-}
-
-template <int NUM_LOGICAL, int NUM_GPUS, int NUM_REPLICATED, int BLOCK_DIM>
-void dispatch_decode_integral_local(
-    tvm::ffi::TensorView out_topk_ids,
-    tvm::ffi::TensorView in_topk_ids,
-    tvm::ffi::TensorView physical_by_rank,
-    tvm::ffi::TensorView rank_mask,
-    tvm::ffi::TensorView replicated_logical) {
-  using namespace host;
-
-  SymbolicSize N{"num_topk_entries"};
-  SymbolicDevice device_;
-
-  TensorMatcher({N}).with_dtype<int32_t>().with_device<kDLCUDA>(device_).verify(out_topk_ids).verify(in_topk_ids);
-  TensorMatcher({NUM_LOGICAL, NUM_GPUS}).with_dtype<int32_t>().with_device<kDLCUDA>(device_).verify(physical_by_rank);
-  TensorMatcher({NUM_LOGICAL}).with_dtype<int32_t>().with_device<kDLCUDA>(device_).verify(rank_mask);
-  TensorMatcher({NUM_REPLICATED}).with_dtype<int32_t>().with_device<kDLCUDA>(device_).verify(replicated_logical);
-
-  const DLDevice device = device_.unwrap();
-  auto kernel = dispatch_decode_integral_kernel<NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, true, false>;
-  LaunchKernel(/*grid=*/1, /*block=*/BLOCK_DIM, device)(
-      kernel,
-      static_cast<int32_t*>(out_topk_ids.data_ptr()),
-      static_cast<const int32_t*>(in_topk_ids.data_ptr()),
-      static_cast<const float*>(nullptr),
       static_cast<const int32_t*>(physical_by_rank.data_ptr()),
       static_cast<const int32_t*>(rank_mask.data_ptr()),
       static_cast<const int32_t*>(replicated_logical.data_ptr()),
@@ -354,7 +319,7 @@ void dispatch_decode_integral_p2p(
   RuntimeCheck(rank >= 0 && rank < NUM_GPUS, "rank is out of range");
 
   const DLDevice device = device_.unwrap();
-  auto kernel = dispatch_decode_integral_kernel<NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, false, true>;
+  auto kernel = dispatch_decode_integral_kernel<NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, true>;
   LaunchKernel(/*grid=*/1, /*block=*/BLOCK_DIM, device)(
       kernel,
       static_cast<int32_t*>(out_topk_ids.data_ptr()),
