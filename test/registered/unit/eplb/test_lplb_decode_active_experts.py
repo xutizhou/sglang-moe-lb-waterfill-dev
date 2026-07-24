@@ -8,6 +8,9 @@ from sglang.kernels.ops.lplb.cuda_solver import (
     dispatch_decode_integral,
     dispatch_decode_integral_torch_reference,
 )
+from sglang.srt.eplb.expert_location import (
+    compute_logical_to_decode_dispatch_physical_map,
+)
 from sglang.srt.eplb.expert_location_dispatch import (
     ExpertLocationDispatchInfo,
     _topk_ids_logical_to_physical_active_experts,
@@ -135,7 +138,7 @@ def test_static_decode_skips_online_lplb(monkeypatch):
         partial_logical_to_rank_dispatch_physical_map=torch.tensor(
             [4, 1, 6], dtype=torch.int64
         ),
-        partial_logical_to_global_dispatch_physical_map=torch.tensor(
+        partial_logical_to_decode_dispatch_physical_map=torch.tensor(
             [0, 1, 2], dtype=torch.int32
         ),
         partial_logical_to_all_physical_map=torch.tensor(
@@ -237,6 +240,56 @@ def test_decode_active_experts_skips_all_reduce(monkeypatch):
     # of source-rank-local token counts.
     for logical in topk_ids.unique():
         assert actual[topk_ids == logical].unique().numel() == 1
+
+
+def test_decode_fixed_map_hybridizes_only_high_value_replicas():
+    logical_to_all = torch.tensor(
+        [
+            [
+                [0, 4],
+                [1, 5],
+                [2, -1],
+                [6, -1],
+            ]
+        ],
+        dtype=torch.int64,
+    )
+    rank0_local = torch.tensor([[0, 1, 2, 6]], dtype=torch.int64)
+    rank1_local = torch.tensor([[4, 5, 2, 6]], dtype=torch.int64)
+    frequency = torch.tensor([[0.9, 0.2, 1.0, 1.0]], dtype=torch.float32)
+
+    rank0_hybrid = compute_logical_to_decode_dispatch_physical_map(
+        logical_to_all,
+        rank0_local,
+        num_physical_experts=8,
+        ep_size=2,
+        global_expert_count=1,
+        decode_activation_frequency=frequency,
+    )
+    rank1_hybrid = compute_logical_to_decode_dispatch_physical_map(
+        logical_to_all,
+        rank1_local,
+        num_physical_experts=8,
+        ep_size=2,
+        global_expert_count=1,
+        decode_activation_frequency=frequency,
+    )
+
+    # Expert 0 has the highest duplicate-activation cost, so both source ranks
+    # use one shared replica. Lower-value expert 1 remains rank-local.
+    assert rank0_hybrid[0, 0] == rank1_hybrid[0, 0]
+    assert rank0_hybrid[0, 1] == 1
+    assert rank1_hybrid[0, 1] == 5
+
+    no_global = compute_logical_to_decode_dispatch_physical_map(
+        logical_to_all,
+        rank1_local,
+        num_physical_experts=8,
+        ep_size=2,
+        global_expert_count=0,
+        decode_activation_frequency=frequency,
+    )
+    torch.testing.assert_close(no_global, rank1_local)
 
 
 def test_decode_dispatch_co_locates_each_logical_expert():

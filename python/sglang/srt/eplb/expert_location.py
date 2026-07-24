@@ -62,7 +62,7 @@ class ExpertLocationMetadata:
     # (layers, num_logical_experts)
     logical_to_rank_dispatch_physical_map: Optional[torch.Tensor]
     # (layers, num_logical_experts)
-    logical_to_global_dispatch_physical_map: Optional[torch.Tensor]
+    logical_to_decode_dispatch_physical_map: Optional[torch.Tensor]
 
     # -------------------------------- properties ------------------------------------
 
@@ -287,6 +287,22 @@ class ExpertLocationMetadata:
             logical_to_all_physical_map != -1, dim=-1
         )
 
+        logical_to_rank_dispatch_physical_map = (
+            compute_logical_to_rank_dispatch_physical_map(
+                server_args=server_args,
+                logical_to_all_physical_map=logical_to_all_physical_map,
+                ep_size=ep_size,
+                num_physical_experts=num_physical_experts,
+                ep_rank=(
+                    moe_ep_rank
+                    if moe_ep_rank is not None
+                    else torch.distributed.get_rank() % ep_size
+                ),
+            )
+            if server_args.ep_dispatch_algorithm in ("static", "lp")
+            else None
+        )
+
         return ExpertLocationMetadata(
             physical_to_logical_map=physical_to_logical_map,
             physical_to_logical_map_cpu=physical_to_logical_map.cpu(),
@@ -294,26 +310,14 @@ class ExpertLocationMetadata:
             logical_to_all_physical_map_cpu=logical_to_all_physical_map_padded.cpu(),
             logical_to_all_physical_map_num_valid=logical_to_all_physical_map_num_valid,
             ep_size=ep_size,
-            logical_to_rank_dispatch_physical_map=(
-                compute_logical_to_rank_dispatch_physical_map(
-                    server_args=server_args,
+            logical_to_rank_dispatch_physical_map=logical_to_rank_dispatch_physical_map,
+            logical_to_decode_dispatch_physical_map=(
+                compute_logical_to_decode_dispatch_physical_map(
                     logical_to_all_physical_map=logical_to_all_physical_map,
-                    ep_size=ep_size,
-                    num_physical_experts=num_physical_experts,
-                    ep_rank=(
-                        moe_ep_rank
-                        if moe_ep_rank is not None
-                        else torch.distributed.get_rank() % ep_size
-                    ),
-                )
-                if server_args.ep_dispatch_algorithm in ("static", "lp")
-                else None
-            ),
-            logical_to_global_dispatch_physical_map=(
-                compute_logical_to_global_dispatch_physical_map(
-                    logical_to_all_physical_map=logical_to_all_physical_map,
+                    logical_to_rank_dispatch_physical_map=logical_to_rank_dispatch_physical_map,
                     num_physical_experts=num_physical_experts,
                     ep_size=ep_size,
+                    global_expert_count=server_args.lplb_decode_global_expert_count,
                     decode_activation_frequency=decode_activation_frequency,
                 )
                 if server_args.ep_dispatch_algorithm == "lp"
@@ -340,7 +344,7 @@ class ExpertLocationMetadata:
             "logical_to_all_physical_map_cpu",
             "logical_to_all_physical_map_num_valid",
             "logical_to_rank_dispatch_physical_map",
-            "logical_to_global_dispatch_physical_map",
+            "logical_to_decode_dispatch_physical_map",
         ]:
             other_field = getattr(other, field)
             self_field = getattr(self, field)
@@ -689,25 +693,35 @@ def compute_logical_to_rank_dispatch_physical_map(
     return logical_to_rank_dispatch_physical_map[ep_rank, :, :].to(device)
 
 
-def compute_logical_to_global_dispatch_physical_map(
+def compute_logical_to_decode_dispatch_physical_map(
     logical_to_all_physical_map: torch.Tensor,
+    logical_to_rank_dispatch_physical_map: torch.Tensor,
     num_physical_experts: int,
     ep_size: int,
+    global_expert_count: int,
     decode_activation_frequency: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    """Build one balanced replica assignment shared by every source rank.
+    """Build a communication-aware fixed decode replica assignment.
 
-    The primary objective remains the exact minimum maximum number of assigned
-    logical experts per rank. Historical per-chunk activation frequency, when
-    available, is used as the secondary load-balancing weight.
+    The most frequently activated redundant logical experts are co-located on
+    one globally consistent replica. Less valuable experts retain the
+    source-rank-local mapping, avoiding unnecessary cross-rank traffic. The
+    globally selected replicas minimize the expected maximum active-expert
+    load using historical per-chunk activation frequency when available.
     """
-    from sglang.kernels.ops.lplb.cuda_solver import (
-        dispatch_decode_integral_torch_reference,
-    )
-
+    if global_expert_count < -1:
+        raise ValueError("lplb_decode_global_expert_count must be >= -1")
+    if num_physical_experts % ep_size != 0:
+        raise ValueError("num_physical_experts must be divisible by ep_size")
     device = logical_to_all_physical_map.device
     logical_to_all_physical_map_cpu = logical_to_all_physical_map.cpu()
+    result = logical_to_rank_dispatch_physical_map.cpu().clone()
     num_layers, num_logical_experts, _ = logical_to_all_physical_map_cpu.shape
+    if result.shape != (num_layers, num_logical_experts):
+        raise ValueError(
+            "logical_to_rank_dispatch_physical_map must have shape "
+            f"{(num_layers, num_logical_experts)}, got {tuple(result.shape)}"
+        )
     if decode_activation_frequency is not None:
         decode_activation_frequency = decode_activation_frequency.cpu()
         if decode_activation_frequency.shape != (num_layers, num_logical_experts):
@@ -716,29 +730,81 @@ def compute_logical_to_global_dispatch_physical_map(
                 f"{(num_layers, num_logical_experts)}, got "
                 f"{tuple(decode_activation_frequency.shape)}"
             )
+    if global_expert_count == 0:
+        return result.to(device=device, non_blocking=True)
 
-    logical_ids = torch.arange(num_logical_experts, dtype=torch.int32)
-    assignments = []
+    physical_per_rank = num_physical_experts // ep_size
     for layer_id in range(num_layers):
         if decode_activation_frequency is None:
-            assignment_weight = torch.ones(num_logical_experts, dtype=torch.float32)
+            activation_weight = torch.ones(num_logical_experts, dtype=torch.float64)
         else:
-            # The integral reference uses integer token load as its secondary
-            # tie breaker. Scale probabilities while keeping every expert
-            # active in the primary exact-capacity assignment.
-            assignment_weight = (
-                decode_activation_frequency[layer_id].mul(1_000_000).round().add(1)
-            )
-        assignments.append(
-            dispatch_decode_integral_torch_reference(
-                logical_ids,
-                assignment_weight,
-                logical_to_all_physical_map_cpu[layer_id],
-                num_physical=num_physical_experts,
-                num_gpus=ep_size,
+            activation_weight = decode_activation_frequency[layer_id].to(torch.float64)
+            # EPLB history can contain zero-only placeholder layers. A unit
+            # weight keeps their initialization deterministic and balanced.
+            if not torch.any(activation_weight > 0):
+                activation_weight = torch.ones(num_logical_experts, dtype=torch.float64)
+
+        physical_by_rank = torch.full(
+            (num_logical_experts, ep_size), -1, dtype=torch.int64
+        )
+        eligible_ranks = []
+        replicated = []
+        for logical_id in range(num_logical_experts):
+            physical_ids = logical_to_all_physical_map_cpu[layer_id, logical_id]
+            physical_ids = physical_ids[physical_ids >= 0].to(torch.int64)
+            ranks = torch.div(physical_ids, physical_per_rank, rounding_mode="floor")
+            unique_ranks = torch.unique(ranks, sorted=True)
+            eligible_ranks.append(unique_ranks.tolist())
+            for rank in unique_ranks.tolist():
+                physical_by_rank[logical_id, rank] = physical_ids[
+                    torch.nonzero(ranks == rank, as_tuple=False)[0, 0]
+                ]
+            if unique_ranks.numel() > 1:
+                replicated.append(logical_id)
+
+        replicated.sort(
+            key=lambda logical_id: (
+                -float(activation_weight[logical_id])
+                * (len(eligible_ranks[logical_id]) - 1),
+                logical_id,
             )
         )
-    return torch.stack(assignments).to(device=device, non_blocking=True)
+        selected = replicated[
+            : (
+                len(replicated)
+                if global_expert_count == -1
+                else min(global_expert_count, len(replicated))
+            )
+        ]
+        selected_set = set(selected)
+
+        # Unselected rank-local experts may activate one physical copy on each
+        # eligible rank. Selected experts are added back exactly once below.
+        rank_load = [0.0] * ep_size
+        for logical_id in range(num_logical_experts):
+            if logical_id in selected_set:
+                continue
+            weight = float(activation_weight[logical_id])
+            for rank in eligible_ranks[logical_id]:
+                rank_load[rank] += weight
+
+        for logical_id in selected:
+            weight = float(activation_weight[logical_id])
+            best_rank = min(
+                eligible_ranks[logical_id],
+                key=lambda rank: (
+                    max(
+                        rank_load[other_rank] + (weight if other_rank == rank else 0)
+                        for other_rank in range(ep_size)
+                    ),
+                    rank_load[rank] + weight,
+                    rank,
+                ),
+            )
+            result[layer_id, logical_id] = physical_by_rank[logical_id, best_rank]
+            rank_load[best_rank] += weight
+
+    return result.to(device=device, non_blocking=True)
 
 
 def _logical_to_all_physical_raw(
