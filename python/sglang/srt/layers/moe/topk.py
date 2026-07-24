@@ -648,10 +648,20 @@ class TopK(MultiPlatformOp):
                     device=device,
                 )
                 decode_without_collective = bool(is_decode) and (
-                    self.lplb_decode_load_metric in ("active_experts", "static")
+                    self.lplb_decode_load_metric
+                    in (
+                        "active_experts",
+                        "active_experts_prior",
+                        "static",
+                    )
                 )
                 if bool(is_decode) and self.lplb_decode_load_metric == "active_experts":
                     lplb_solver.solve_decode_active_experts_p2p(empty_topk_ids)
+                elif (
+                    bool(is_decode)
+                    and self.lplb_decode_load_metric == "active_experts_prior"
+                ):
+                    lplb_solver.solve_decode_all_active(empty_topk_ids)
                 elif not decode_without_collective:
                     lplb_solver.solve(empty_topk_ids)
         topk = self.topk_config.top_k - self.topk_config.num_fused_shared_experts
@@ -1903,6 +1913,14 @@ def _post_process_topk_ids(
                 if lplb_solver is not None:
                     lplb_physical_topk_ids = (
                         lplb_solver.solve_decode_active_experts_p2p(topk_ids)
+                    )
+            elif lplb_decode_load_metric == "active_experts_prior":
+                from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
+
+                lplb_solver = get_global_lplb_solver(layer_id)
+                if lplb_solver is not None:
+                    lplb_physical_topk_ids = lplb_solver.solve_decode_all_active(
+                        topk_ids
                     )
             else:
                 from sglang.srt.eplb.lplb_solver import get_global_lplb_solver

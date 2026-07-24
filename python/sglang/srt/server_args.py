@@ -2247,11 +2247,18 @@ class ServerArgs:
         NS("exec.moe"),
     ] = None
     lplb_decode_load_metric: A[
-        Literal["tokens", "active_experts", "static"],
+        Literal[
+            "tokens",
+            "active_experts",
+            "active_experts_prior",
+            "static",
+        ],
         "Decode policy used with --ep-dispatch-algorithm=lp. 'tokens' runs "
         "the regular token-count LPLB solver, 'active_experts' minimizes the "
         "maximum number of activated experts per rank using a compact GPU P2P "
-        "active-set exchange, and 'static' skips online decode balancing and "
+        "active-set exchange, 'active_experts_prior' uses one globally "
+        "consistent all-active assignment without decode communication, and "
+        "'static' skips online decode balancing and "
         "uses the initialized fixed replica map.",
         NS("exec.moe"),
     ] = "tokens"

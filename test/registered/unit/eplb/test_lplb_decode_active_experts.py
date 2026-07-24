@@ -153,6 +153,9 @@ def test_empty_decode_participation_matches_policy(monkeypatch):
         solve_decode_active_experts_p2p=lambda ids: calls.append(
             ("active_experts", tuple(ids.shape))
         ),
+        solve_decode_all_active=lambda ids: calls.append(
+            ("active_experts_prior", tuple(ids.shape))
+        ),
     )
     monkeypatch.setattr(
         "sglang.srt.eplb.lplb_solver.get_global_lplb_solver",
@@ -172,6 +175,7 @@ def test_empty_decode_participation_matches_policy(monkeypatch):
     for policy, expected in (
         ("tokens", "tokens"),
         ("active_experts", "active_experts"),
+        ("active_experts_prior", "active_experts_prior"),
         ("static", None),
     ):
         calls.clear()
@@ -248,3 +252,32 @@ def test_decode_integral_cuda_matches_torch_reference():
     )
 
     torch.testing.assert_close(actual, expected)
+
+
+def test_decode_all_active_prior_is_precomputed_and_consistent(monkeypatch):
+    if not torch.cuda.is_available():
+        return
+    from sglang.kernels.ops.lplb import torch_solver
+
+    monkeypatch.setattr(torch_solver, "warmup", lambda *_args, **_kwargs: None)
+    topk_ids, _, log2phy_map = _integral_decode_case("cuda")
+    phy2log = torch.tensor(
+        [0, 4, 6, 1, 4, 7, 2, 5, 6, 3, 5, 7],
+        dtype=torch.int64,
+        device="cuda",
+    )
+    solver = LPLBSolver(phy2log, log2phy_map, num_gpus=4)
+    solver.initialize_decode_all_active()
+
+    actual = solver.solve_decode_all_active(topk_ids)
+    for logical in topk_ids.unique():
+        assert actual[topk_ids == logical].unique().numel() == 1
+    logical_ids = torch.arange(8, dtype=torch.int32, device="cuda")
+    physical_ids = solver.solve_decode_all_active(logical_ids)
+    active_load = [0] * 4
+    for logical, physical in zip(
+        logical_ids.cpu().tolist(), physical_ids.cpu().tolist(), strict=True
+    ):
+        assert physical in log2phy_map[logical].cpu().tolist()
+        active_load[physical // 3] += 1
+    assert active_load == [2, 2, 2, 2]

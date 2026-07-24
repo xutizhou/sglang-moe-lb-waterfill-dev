@@ -248,6 +248,7 @@ class LPLBSolver:
             log2phy.shape, dtype=torch.float32, device=device
         )
         self._decode_p2p_resources = None
+        self._decode_all_active_physical = None
 
     def initialize_decode_p2p(self) -> None:
         """Create compact symmetric-memory resources for decode active-set union.
@@ -309,6 +310,23 @@ class LPLBSolver:
             flag_handle,
         )
 
+    def initialize_decode_all_active(self) -> None:
+        """Precompute one globally consistent map with every expert active."""
+        if self._decode_all_active_physical is not None:
+            return
+        from sglang.kernels.ops.lplb.cuda_solver import dispatch_decode_integral
+
+        device = self.decode_physical_by_rank.device
+        logical_ids = torch.arange(self.num_logical, dtype=torch.int32, device=device)
+        all_active = torch.ones(self.num_logical, dtype=torch.float32, device=device)
+        self._decode_all_active_physical = dispatch_decode_integral(
+            logical_ids,
+            all_active,
+            self.decode_physical_by_rank,
+            self.decode_rank_mask,
+            self.decode_log_replicated,
+        )
+
     def solve(self, topk_ids: torch.Tensor) -> torch.Tensor:
         """
         Full LPLB pipeline: count -> all-reduce -> LP solve -> return log2phy_prob.
@@ -361,6 +379,14 @@ class LPLBSolver:
             barrier_state=barrier_state,
             rank=self.ep_group.rank_in_group,
         )
+
+    def solve_decode_all_active(self, topk_ids: torch.Tensor) -> torch.Tensor:
+        """Map decode routes through the precomputed all-active assignment."""
+        if self._decode_all_active_physical is None:
+            raise RuntimeError(
+                "All-active decode LPLB was not initialized at model setup."
+            )
+        return self._decode_all_active_physical[topk_ids]
 
     def _count_and_all_reduce(self, topk_ids: torch.Tensor) -> torch.Tensor:
         """Return global logical-expert token counts as float32."""
