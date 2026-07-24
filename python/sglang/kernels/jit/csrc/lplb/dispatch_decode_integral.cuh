@@ -29,7 +29,7 @@
 
 namespace {
 
-template <int NUM_LOGICAL, int NUM_GPUS, int NUM_REPLICATED, int BLOCK_DIM>
+template <int NUM_LOGICAL, int NUM_GPUS, int NUM_REPLICATED, int BLOCK_DIM, bool COUNT_LOCAL>
 __global__ void dispatch_decode_integral_kernel(
     int32_t* __restrict__ out_topk_ids,
     const int32_t* __restrict__ in_topk_ids,
@@ -41,14 +41,32 @@ __global__ void dispatch_decode_integral_kernel(
   constexpr int REPLICATED_STORAGE = NUM_REPLICATED > 0 ? NUM_REPLICATED : 1;
 
   __shared__ int32_t chosen_physical[NUM_LOGICAL];
+  __shared__ int logical_counts[NUM_LOGICAL];
   __shared__ int fixed_active_load[NUM_GPUS];
   __shared__ int fixed_token_load[NUM_GPUS];
 
+  for (int logical = threadIdx.x; logical < NUM_LOGICAL; logical += BLOCK_DIM) {
+    if constexpr (COUNT_LOCAL) {
+      logical_counts[logical] = 0;
+    } else {
+      logical_counts[logical] = static_cast<int>(global_counts[logical]);
+    }
+  }
   if (threadIdx.x < NUM_GPUS) {
     fixed_active_load[threadIdx.x] = 0;
     fixed_token_load[threadIdx.x] = 0;
   }
   __syncthreads();
+
+  if constexpr (COUNT_LOCAL) {
+    for (int idx = threadIdx.x; idx < N; idx += BLOCK_DIM) {
+      const int logical = in_topk_ids[idx];
+      if (logical >= 0) {
+        atomicAdd(&logical_counts[logical], 1);
+      }
+    }
+    __syncthreads();
+  }
 
   // Compact-map initialization and fixed-load accounting are independent per
   // logical expert. Parallelizing this 256-row scan leaves only the small
@@ -58,7 +76,7 @@ __global__ void dispatch_decode_integral_kernel(
     const int first_rank = __ffs(static_cast<int>(mask)) - 1;
     chosen_physical[logical] = physical_by_rank[logical * NUM_GPUS + first_rank];
 
-    const int count = static_cast<int>(global_counts[logical]);
+    const int count = logical_counts[logical];
     if (count <= 0) continue;
 
     if (__popc(mask) == 1) {
@@ -78,7 +96,7 @@ __global__ void dispatch_decode_integral_kernel(
     // The exact primary objective does not depend on the visit order.
     for (int i = 0; i < NUM_REPLICATED; ++i) {
       const int logical = replicated_logical[i];
-      if (global_counts[logical] > 0) {
+      if (logical_counts[logical] > 0) {
         replicated_ids[replicated_count++] = logical;
       }
     }
@@ -171,7 +189,7 @@ __global__ void dispatch_decode_integral_kernel(
         while (destination >= 0) {
           const int expert = parent_expert[destination];
           const int old_rank = replicated_rank[expert];
-          const int count = static_cast<int>(global_counts[replicated_ids[expert]]);
+          const int count = logical_counts[replicated_ids[expert]];
           if (old_rank >= 0) {
             --active_load[old_rank];
             token_load[old_rank] -= count;
@@ -196,7 +214,8 @@ __global__ void dispatch_decode_integral_kernel(
   __syncthreads();
 
   for (int idx = threadIdx.x; idx < N; idx += BLOCK_DIM) {
-    out_topk_ids[idx] = chosen_physical[in_topk_ids[idx]];
+    const int logical = in_topk_ids[idx];
+    out_topk_ids[idx] = logical >= 0 ? chosen_physical[logical] : -1;
   }
 }
 
@@ -221,12 +240,43 @@ void dispatch_decode_integral(
 
   const DLDevice device = device_.unwrap();
   using KernelT = void (*)(int32_t*, const int32_t*, const float*, const int32_t*, const int32_t*, const int32_t*, int);
-  KernelT kernel = dispatch_decode_integral_kernel<NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM>;
+  KernelT kernel = dispatch_decode_integral_kernel<NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, false>;
   LaunchKernel(/*grid=*/1, /*block=*/BLOCK_DIM, device)(
       kernel,
       static_cast<int32_t*>(out_topk_ids.data_ptr()),
       static_cast<const int32_t*>(in_topk_ids.data_ptr()),
       static_cast<const float*>(global_counts.data_ptr()),
+      static_cast<const int32_t*>(physical_by_rank.data_ptr()),
+      static_cast<const int32_t*>(rank_mask.data_ptr()),
+      static_cast<const int32_t*>(replicated_logical.data_ptr()),
+      static_cast<int>(N.unwrap()));
+}
+
+template <int NUM_LOGICAL, int NUM_GPUS, int NUM_REPLICATED, int BLOCK_DIM>
+void dispatch_decode_integral_local(
+    tvm::ffi::TensorView out_topk_ids,
+    tvm::ffi::TensorView in_topk_ids,
+    tvm::ffi::TensorView physical_by_rank,
+    tvm::ffi::TensorView rank_mask,
+    tvm::ffi::TensorView replicated_logical) {
+  using namespace host;
+
+  SymbolicSize N{"num_topk_entries"};
+  SymbolicDevice device_;
+
+  TensorMatcher({N}).with_dtype<int32_t>().with_device<kDLCUDA>(device_).verify(out_topk_ids).verify(in_topk_ids);
+  TensorMatcher({NUM_LOGICAL, NUM_GPUS}).with_dtype<int32_t>().with_device<kDLCUDA>(device_).verify(physical_by_rank);
+  TensorMatcher({NUM_LOGICAL}).with_dtype<int32_t>().with_device<kDLCUDA>(device_).verify(rank_mask);
+  TensorMatcher({NUM_REPLICATED}).with_dtype<int32_t>().with_device<kDLCUDA>(device_).verify(replicated_logical);
+
+  const DLDevice device = device_.unwrap();
+  using KernelT = void (*)(int32_t*, const int32_t*, const float*, const int32_t*, const int32_t*, const int32_t*, int);
+  KernelT kernel = dispatch_decode_integral_kernel<NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, true>;
+  LaunchKernel(/*grid=*/1, /*block=*/BLOCK_DIM, device)(
+      kernel,
+      static_cast<int32_t*>(out_topk_ids.data_ptr()),
+      static_cast<const int32_t*>(in_topk_ids.data_ptr()),
+      static_cast<const float*>(nullptr),
       static_cast<const int32_t*>(physical_by_rank.data_ptr()),
       static_cast<const int32_t*>(rank_mask.data_ptr()),
       static_cast<const int32_t*>(replicated_logical.data_ptr()),

@@ -314,7 +314,11 @@ def _dispatch_decode_integral_module(
         *args,
         cuda_files=["lplb/dispatch_decode_integral.cuh"],
         cuda_wrappers=[
-            ("dispatch_decode_integral", f"dispatch_decode_integral<{args}>")
+            ("dispatch_decode_integral", f"dispatch_decode_integral<{args}>"),
+            (
+                "dispatch_decode_integral_local",
+                f"dispatch_decode_integral_local<{args}>",
+            ),
         ],
     )
 
@@ -354,6 +358,48 @@ def dispatch_decode_integral(
         out,
         flat_ids,
         global_counts,
+        physical_by_rank,
+        rank_mask,
+        replicated_logical,
+    )
+    return out.view(original_shape).to(topk_ids.dtype)
+
+
+def dispatch_decode_integral_local(
+    topk_ids: torch.Tensor,
+    physical_by_rank: torch.Tensor,
+    rank_mask: torch.Tensor,
+    replicated_logical: torch.Tensor,
+) -> torch.Tensor:
+    """Assign decode experts from the rank-local active set in one launch.
+
+    This deliberately avoids an EP collective. Each source rank independently
+    balances the experts in its local decode chunk across eligible replicas.
+    """
+    if not topk_ids.is_cuda:
+        raise RuntimeError(
+            "Local greedy decode dispatch requires CUDA tensors; got topk_ids "
+            f"on {topk_ids.device}."
+        )
+    original_shape = topk_ids.shape
+    flat_ids = topk_ids.reshape(-1).contiguous().to(torch.int32)
+    num_logical, num_gpus = physical_by_rank.shape
+    assert physical_by_rank.dtype == torch.int32
+    assert rank_mask.shape == (num_logical,)
+    assert rank_mask.dtype == torch.int32
+    assert replicated_logical.dtype == torch.int32
+    num_replicated = replicated_logical.shape[0]
+
+    out = torch.empty(flat_ids.shape[0], dtype=torch.int32, device=topk_ids.device)
+    module = _dispatch_decode_integral_module(
+        num_logical,
+        num_gpus,
+        num_replicated,
+        DISPATCH_BLOCK_DIM,
+    )
+    module.dispatch_decode_integral_local(
+        out,
+        flat_ids,
         physical_by_rank,
         rank_mask,
         replicated_logical,

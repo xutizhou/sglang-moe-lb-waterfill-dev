@@ -31,8 +31,6 @@ class ExpertLocationDispatchInfo:
     # (num_logical_experts,)
     partial_logical_to_all_physical_map_num_valid: torch.Tensor
     num_physical_experts: int
-    # (num_logical_experts,)
-    partial_logical_to_decode_dispatch_physical_map: Optional[torch.Tensor] = None
 
     @classmethod
     def init_new(cls, layer_id: int):
@@ -50,14 +48,6 @@ class ExpertLocationDispatchInfo:
                     layer_id, :
                 ]
                 if expert_location_metadata.logical_to_rank_dispatch_physical_map
-                is not None
-                else None
-            ),
-            partial_logical_to_decode_dispatch_physical_map=(
-                expert_location_metadata.logical_to_decode_dispatch_physical_map[
-                    layer_id, :
-                ]
-                if expert_location_metadata.logical_to_decode_dispatch_physical_map
                 is not None
                 else None
             ),

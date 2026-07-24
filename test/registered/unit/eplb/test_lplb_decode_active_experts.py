@@ -6,10 +6,8 @@ import torch
 
 from sglang.kernels.ops.lplb.cuda_solver import (
     dispatch_decode_integral,
+    dispatch_decode_integral_local,
     dispatch_decode_integral_torch_reference,
-)
-from sglang.srt.eplb.expert_location import (
-    compute_logical_to_decode_dispatch_physical_map,
 )
 from sglang.srt.eplb.expert_location_dispatch import (
     ExpertLocationDispatchInfo,
@@ -138,9 +136,6 @@ def test_static_decode_skips_online_lplb(monkeypatch):
         partial_logical_to_rank_dispatch_physical_map=torch.tensor(
             [4, 1, 6], dtype=torch.int64
         ),
-        partial_logical_to_decode_dispatch_physical_map=torch.tensor(
-            [0, 1, 2], dtype=torch.int32
-        ),
         partial_logical_to_all_physical_map=torch.tensor(
             [[0, 4], [1, -1], [2, 6]], dtype=torch.int64
         ),
@@ -208,8 +203,10 @@ def test_empty_decode_participation_matches_policy(monkeypatch):
 def test_decode_active_experts_skips_all_reduce(monkeypatch):
     from sglang.kernels.ops.lplb import torch_solver
 
+    if not torch.cuda.is_available():
+        return
     monkeypatch.setattr(torch_solver, "warmup", lambda *_args, **_kwargs: None)
-    phy2log = torch.tensor([0, 1, 2, 3, 0, 1], dtype=torch.int64)
+    phy2log = torch.tensor([0, 1, 2, 3, 0, 1], dtype=torch.int64, device="cuda")
     log2phy = torch.tensor(
         [
             [0, 4],
@@ -218,6 +215,7 @@ def test_decode_active_experts_skips_all_reduce(monkeypatch):
             [3, -1],
         ],
         dtype=torch.int64,
+        device="cuda",
     )
 
     class FailOnCollective:
@@ -230,66 +228,24 @@ def test_decode_active_experts_skips_all_reduce(monkeypatch):
         num_gpus=2,
         ep_group=FailOnCollective(),
     )
-    topk_ids = torch.tensor([[0, 1], [1, 3], [0, 2]], dtype=torch.int32)
+    topk_ids = torch.tensor([[0, 1], [1, 3], [0, 2]], dtype=torch.int32, device="cuda")
 
     actual = solver.solve_decode_active_experts(topk_ids)
-    expected = solver.decode_global_physical[topk_ids]
+    local_counts = torch.bincount(
+        topk_ids.flatten().long(), minlength=solver.num_logical
+    ).float()
+    expected = dispatch_decode_integral_torch_reference(
+        topk_ids.cpu(),
+        local_counts.cpu(),
+        log2phy.cpu(),
+        num_physical=6,
+        num_gpus=2,
+    ).cuda()
     torch.testing.assert_close(actual, expected)
 
-    # One globally consistent physical copy per logical expert, independent
-    # of source-rank-local token counts.
+    # One physical copy per logical expert within this source-rank chunk.
     for logical in topk_ids.unique():
         assert actual[topk_ids == logical].unique().numel() == 1
-
-
-def test_decode_fixed_map_hybridizes_only_high_value_replicas():
-    logical_to_all = torch.tensor(
-        [
-            [
-                [0, 4],
-                [1, 5],
-                [2, -1],
-                [6, -1],
-            ]
-        ],
-        dtype=torch.int64,
-    )
-    rank0_local = torch.tensor([[0, 1, 2, 6]], dtype=torch.int64)
-    rank1_local = torch.tensor([[4, 5, 2, 6]], dtype=torch.int64)
-    frequency = torch.tensor([[0.9, 0.2, 1.0, 1.0]], dtype=torch.float32)
-
-    rank0_hybrid = compute_logical_to_decode_dispatch_physical_map(
-        logical_to_all,
-        rank0_local,
-        num_physical_experts=8,
-        ep_size=2,
-        global_expert_count=1,
-        decode_activation_frequency=frequency,
-    )
-    rank1_hybrid = compute_logical_to_decode_dispatch_physical_map(
-        logical_to_all,
-        rank1_local,
-        num_physical_experts=8,
-        ep_size=2,
-        global_expert_count=1,
-        decode_activation_frequency=frequency,
-    )
-
-    # Expert 0 has the highest duplicate-activation cost, so both source ranks
-    # use one shared replica. Lower-value expert 1 remains rank-local.
-    assert rank0_hybrid[0, 0] == rank1_hybrid[0, 0]
-    assert rank0_hybrid[0, 1] == 1
-    assert rank1_hybrid[0, 1] == 5
-
-    no_global = compute_logical_to_decode_dispatch_physical_map(
-        logical_to_all,
-        rank1_local,
-        num_physical_experts=8,
-        ep_size=2,
-        global_expert_count=0,
-        decode_activation_frequency=frequency,
-    )
-    torch.testing.assert_close(no_global, rank1_local)
 
 
 def test_decode_dispatch_co_locates_each_logical_expert():
@@ -431,3 +387,36 @@ def test_decode_integral_cuda_matches_torch_reference():
     )
 
     torch.testing.assert_close(actual, expected)
+
+
+def test_decode_integral_local_cuda_matches_torch_reference():
+    if not torch.cuda.is_available():
+        return
+    topk_ids, local_counts, log2phy_map = _integral_decode_case("cuda")
+    physical_by_rank, rank_mask, replicated_logical = _compact_decode_map(
+        log2phy_map,
+        num_physical=12,
+        num_gpus=4,
+    )
+    padded_topk_ids = torch.cat(
+        [
+            topk_ids,
+            torch.full((1, topk_ids.shape[1]), -1, dtype=torch.int32, device="cuda"),
+        ]
+    )
+    expected = dispatch_decode_integral_torch_reference(
+        topk_ids.cpu(),
+        local_counts.cpu(),
+        log2phy_map.cpu(),
+        num_physical=12,
+        num_gpus=4,
+    ).cuda()
+    actual = dispatch_decode_integral_local(
+        padded_topk_ids,
+        physical_by_rank,
+        rank_mask,
+        replicated_logical,
+    )
+
+    torch.testing.assert_close(actual[:-1], expected)
+    torch.testing.assert_close(actual[-1], torch.full_like(actual[-1], -1))

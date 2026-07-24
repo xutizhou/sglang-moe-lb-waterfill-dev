@@ -375,8 +375,12 @@ def _check_decode_direct_with_empty_rank(
     world_size: int,
     device: torch.device,
 ):
-    """Decode assignment must not require empty-rank participation."""
-    solver, _, _, _ = _build_solver()
+    """Rank-local decode assignment must not require empty-rank participation."""
+    from sglang.kernels.ops.lplb.cuda_solver import (
+        dispatch_decode_integral_torch_reference,
+    )
+
+    solver, _, log2phy, _ = _build_solver()
     rank0_topk = torch.tensor(
         [[0, 1], [0, 2], [3, 0], [0, 1]],
         dtype=torch.int32,
@@ -388,9 +392,18 @@ def _check_decode_direct_with_empty_rank(
         topk_ids = torch.empty((0, TOPK), dtype=torch.int32, device=device)
 
     actual = solver.solve_decode_active_experts(topk_ids)
-    expected = solver.decode_global_physical[topk_ids]
+    local_counts = torch.bincount(
+        topk_ids.flatten().long(), minlength=NUM_LOGICAL
+    ).float()
+    expected = dispatch_decode_integral_torch_reference(
+        topk_ids.cpu(),
+        local_counts.cpu(),
+        log2phy,
+        num_physical=NUM_PHY,
+        num_gpus=NUM_GPUS,
+    ).to(device)
     assert torch.equal(actual, expected), (
-        f"rank {rank}: communication-free decode output disagrees with fixed "
+        f"rank {rank}: communication-free decode output disagrees with local "
         f"reference ({(actual != expected).sum().item()} mismatches)"
     )
 
