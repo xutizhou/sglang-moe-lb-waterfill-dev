@@ -207,6 +207,7 @@ class ExpertLocationMetadata:
         decode_activation_frequency = (
             (decode_logical_count > 0).to(torch.float32).mean(dim=0)
         )
+        decode_token_frequency = decode_logical_count.to(torch.float32).mean(dim=0)
         logical_count = logical_count.to(server_args.device)
 
         common = ExpertLocationMetadata._init_common(server_args, model_config)
@@ -244,6 +245,7 @@ class ExpertLocationMetadata:
                 server_args.device
             ),
             decode_activation_frequency=decode_activation_frequency,
+            decode_token_frequency=decode_token_frequency,
         )
 
     @staticmethod
@@ -295,6 +297,7 @@ class ExpertLocationMetadata:
         logical_to_all_physical_map: torch.Tensor,
         moe_ep_rank: Optional[int] = None,
         decode_activation_frequency: Optional[torch.Tensor] = None,
+        decode_token_frequency: Optional[torch.Tensor] = None,
     ):
         _, num_physical_experts = physical_to_logical_map.shape
 
@@ -340,6 +343,7 @@ class ExpertLocationMetadata:
                     ep_size=ep_size,
                     global_expert_count=server_args.lplb_decode_global_expert_count,
                     decode_activation_frequency=decode_activation_frequency,
+                    decode_token_frequency=decode_token_frequency,
                 )
                 if server_args.ep_dispatch_algorithm == "lp"
                 else None
@@ -721,6 +725,7 @@ def compute_logical_to_decode_dispatch_physical_map(
     ep_size: int,
     global_expert_count: int,
     decode_activation_frequency: Optional[torch.Tensor] = None,
+    decode_token_frequency: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """Build a communication-aware fixed decode replica assignment.
 
@@ -751,6 +756,14 @@ def compute_logical_to_decode_dispatch_physical_map(
                 f"{(num_layers, num_logical_experts)}, got "
                 f"{tuple(decode_activation_frequency.shape)}"
             )
+    if decode_token_frequency is not None:
+        decode_token_frequency = decode_token_frequency.cpu()
+        if decode_token_frequency.shape != (num_layers, num_logical_experts):
+            raise ValueError(
+                "decode_token_frequency must have shape "
+                f"{(num_layers, num_logical_experts)}, got "
+                f"{tuple(decode_token_frequency.shape)}"
+            )
     if global_expert_count == 0:
         return result.to(device=device, non_blocking=True)
 
@@ -762,6 +775,11 @@ def compute_logical_to_decode_dispatch_physical_map(
             activation_weight = decode_activation_frequency[layer_id].to(torch.float64)
             if not torch.any(activation_weight > 0):
                 activation_weight = torch.ones(num_logical_experts, dtype=torch.float64)
+        token_weight = (
+            activation_weight
+            if decode_token_frequency is None
+            else decode_token_frequency[layer_id].to(torch.float64)
+        )
 
         physical_by_rank = torch.full(
             (num_logical_experts, ep_size), -1, dtype=torch.int64
@@ -783,8 +801,19 @@ def compute_logical_to_decode_dispatch_physical_map(
 
         replicated.sort(
             key=lambda logical_id: (
-                -float(activation_weight[logical_id])
-                * (len(eligible_ranks[logical_id]) - 1),
+                -(
+                    float(activation_weight[logical_id])
+                    * (len(eligible_ranks[logical_id]) - 1)
+                )
+                / max(
+                    (
+                        float(token_weight[logical_id])
+                        * (1.0 - 1.0 / len(eligible_ranks[logical_id]))
+                    )
+                    ** 0.5,
+                    1e-12,
+                ),
+                -float(activation_weight[logical_id]),
                 logical_id,
             )
         )
@@ -798,15 +827,21 @@ def compute_logical_to_decode_dispatch_physical_map(
         selected_set = set(selected)
 
         rank_load = [0.0] * ep_size
+        rank_token_load = [0.0] * ep_size
         for logical_id in range(num_logical_experts):
             if logical_id in selected_set:
                 continue
             weight = float(activation_weight[logical_id])
+            tokens_per_rank = float(token_weight[logical_id]) / len(
+                eligible_ranks[logical_id]
+            )
             for rank in eligible_ranks[logical_id]:
                 rank_load[rank] += weight
+                rank_token_load[rank] += tokens_per_rank
 
         for logical_id in selected:
             weight = float(activation_weight[logical_id])
+            tokens = float(token_weight[logical_id])
             best_rank = min(
                 eligible_ranks[logical_id],
                 key=lambda rank: (
@@ -814,12 +849,19 @@ def compute_logical_to_decode_dispatch_physical_map(
                         rank_load[other_rank] + (weight if other_rank == rank else 0)
                         for other_rank in range(ep_size)
                     ),
+                    max(
+                        rank_token_load[other_rank]
+                        + (tokens if other_rank == rank else 0)
+                        for other_rank in range(ep_size)
+                    ),
                     rank_load[rank] + weight,
+                    rank_token_load[rank] + tokens,
                     rank,
                 ),
             )
             result[layer_id, logical_id] = physical_by_rank[logical_id, best_rank]
             rank_load[best_rank] += weight
+            rank_token_load[best_rank] += tokens
 
     return result.to(device=device, non_blocking=True)
 
