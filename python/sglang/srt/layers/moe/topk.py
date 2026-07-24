@@ -1895,19 +1895,14 @@ def _post_process_topk_ids(
             and lplb_decode_load_metric != "static"
         ):
             if lplb_decode_load_metric == "active_experts":
-                from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
-
-                lplb_solver = get_global_lplb_solver(layer_id)
-                if lplb_solver is None:
-                    raise RuntimeError(
-                        "Active-expert decode requires an initialized LPLB solver."
-                    )
-                # Exclude CUDA-graph padding from the local active-expert set.
-                # The fused integral kernel preserves -1 in padded rows.
-                _mask_topk_ids_padded_region(topk_ids, num_token_non_padded)
-                lplb_physical_topk_ids = lplb_solver.solve_decode_active_experts(
-                    topk_ids
+                decode_map = (
+                    expert_location_dispatch_info.partial_logical_to_decode_dispatch_physical_map
                 )
+                if decode_map is None:
+                    raise RuntimeError(
+                        "Active-expert decode requires a fixed decode replica map."
+                    )
+                lplb_physical_topk_ids = decode_map[topk_ids]
             else:
                 from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
 

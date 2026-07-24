@@ -2254,6 +2254,14 @@ class ServerArgs:
         "online decode balancing and uses the initialized fixed replica map.",
         NS("exec.moe"),
     ] = "tokens"
+    lplb_decode_global_expert_count: A[
+        int,
+        "With --lplb-decode-load-metric=active_experts, globally co-locate at "
+        "most this many redundant logical experts per layer and keep the rest "
+        "on the source-rank-local replica map. -1 co-locates every redundant "
+        "logical expert and 0 is equivalent to static decode dispatch.",
+        NS("exec.moe"),
+    ] = 16
     init_expert_location: A[str, "Initial location of EP experts.", NS("exec.moe")] = (
         "trivial"
     )
