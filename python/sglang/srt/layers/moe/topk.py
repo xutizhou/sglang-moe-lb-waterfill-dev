@@ -95,6 +95,7 @@ from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_r
 from sglang.srt.eplb.expert_location_dispatch import (
     ExpertLocationDispatchInfo,
     topk_ids_logical_to_physical,
+    topk_ids_logical_to_physical_static,
 )
 from sglang.srt.layers.dp_attention import is_allocation_symmetric
 from sglang.srt.layers.moe import get_moe_runner_backend
@@ -421,8 +422,12 @@ class TopK(MultiPlatformOp):
         self.layer_id = layer_id
         from sglang.srt.runtime_context import get_server_args
 
+        server_args = get_server_args()
         self.enable_waterfill = (
-            num_fused_shared_experts > 0 and get_server_args().enable_waterfill
+            num_fused_shared_experts > 0 and server_args.enable_waterfill
+        )
+        self.lplb_decode_load_metric = getattr(
+            server_args, "lplb_decode_load_metric", "tokens"
         )
 
         self.waterfill_balancer = None
@@ -457,7 +462,7 @@ class TopK(MultiPlatformOp):
         topk_output: TopKOutput,
         num_tokens: int,
         *,
-        waterfill_is_decode: Optional[bool] = None,
+        is_decode: Optional[bool] = None,
     ) -> TopKOutput:
         if self.enable_waterfill and self.waterfill_balancer is None:
             raise RuntimeError(
@@ -467,7 +472,7 @@ class TopK(MultiPlatformOp):
             return topk_output
         assert TopKOutputChecker.format_is_standard(topk_output)
         return self.waterfill_balancer.expand_topk(
-            topk_output, num_tokens, is_decode=waterfill_is_decode
+            topk_output, num_tokens, is_decode=is_decode
         )
 
     def forward_native(
@@ -477,7 +482,7 @@ class TopK(MultiPlatformOp):
         *,
         num_token_non_padded: Optional[torch.Tensor] = None,
         expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
-        waterfill_is_decode: Optional[bool] = None,
+        is_decode: Optional[bool] = None,
     ) -> TopKOutput:
         self.topk_config.torch_native = True
         topk_output = select_experts(
@@ -487,12 +492,14 @@ class TopK(MultiPlatformOp):
             topk_config=self.topk_config,
             num_token_non_padded=num_token_non_padded,
             expert_location_dispatch_info=expert_location_dispatch_info,
-            lplb_is_decode=bool(waterfill_is_decode),
+            lplb_decode_load_metric=(
+                self.lplb_decode_load_metric if bool(is_decode) else None
+            ),
         )
         return self._apply_waterfill(
             topk_output,
             hidden_states.shape[0],
-            waterfill_is_decode=waterfill_is_decode,
+            is_decode=is_decode,
         )
 
     def forward_cuda(
@@ -502,7 +509,7 @@ class TopK(MultiPlatformOp):
         *,
         num_token_non_padded: Optional[torch.Tensor] = None,
         expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
-        waterfill_is_decode: Optional[bool] = None,
+        is_decode: Optional[bool] = None,
     ) -> TopKOutput:
         if self.topk_config.output_format is not None:
             output_format = self.topk_config.output_format
@@ -557,12 +564,14 @@ class TopK(MultiPlatformOp):
                     topk_config=self.topk_config,
                     num_token_non_padded=num_token_non_padded,
                     expert_location_dispatch_info=expert_location_dispatch_info,
-                    lplb_is_decode=bool(waterfill_is_decode),
+                    lplb_decode_load_metric=(
+                        self.lplb_decode_load_metric if bool(is_decode) else None
+                    ),
                 )
         return self._apply_waterfill(
             topk_output,
             hidden_states.shape[0],
-            waterfill_is_decode=waterfill_is_decode,
+            is_decode=is_decode,
         )
 
     def forward_cpu(
@@ -572,7 +581,7 @@ class TopK(MultiPlatformOp):
         *,
         num_token_non_padded: Optional[torch.Tensor] = None,
         expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
-        waterfill_is_decode: Optional[bool] = None,
+        is_decode: Optional[bool] = None,
     ) -> TopKOutput:
         topk_output = select_experts(
             hidden_states=hidden_states,
@@ -581,12 +590,14 @@ class TopK(MultiPlatformOp):
             topk_config=self.topk_config,
             num_token_non_padded=num_token_non_padded,
             expert_location_dispatch_info=expert_location_dispatch_info,
-            lplb_is_decode=bool(waterfill_is_decode),
+            lplb_decode_load_metric=(
+                self.lplb_decode_load_metric if bool(is_decode) else None
+            ),
         )
         return self._apply_waterfill(
             topk_output,
             hidden_states.shape[0],
-            waterfill_is_decode=waterfill_is_decode,
+            is_decode=is_decode,
         )
 
     def forward_npu(
@@ -596,7 +607,7 @@ class TopK(MultiPlatformOp):
         *,
         num_token_non_padded: Optional[torch.Tensor] = None,
         expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
-        waterfill_is_decode: Optional[bool] = None,
+        is_decode: Optional[bool] = None,
     ) -> TopKOutput:
 
         from sglang.srt.hardware_backend.npu.moe.topk import fused_topk_npu
@@ -615,7 +626,7 @@ class TopK(MultiPlatformOp):
         device: torch.device,
         *,
         layer_id: Optional[int] = None,
-        waterfill_is_decode: Optional[bool] = None,
+        is_decode: Optional[bool] = None,
     ) -> TopKOutput:
         """Return an empty topk output for a rank with zero tokens this forward.
 
@@ -636,9 +647,9 @@ class TopK(MultiPlatformOp):
                     dtype=torch.int32,
                     device=device,
                 )
-                if waterfill_is_decode:
+                if self.lplb_decode_load_metric == "active_experts" and bool(is_decode):
                     lplb_solver.solve_decode_active_experts(empty_topk_ids)
-                else:
+                elif not (self.lplb_decode_load_metric == "static" and bool(is_decode)):
                     lplb_solver.solve(empty_topk_ids)
         topk = self.topk_config.top_k - self.topk_config.num_fused_shared_experts
         with use_symmetric_memory(
@@ -659,9 +670,7 @@ class TopK(MultiPlatformOp):
                     (0, topk_output.topk_weights.shape[-1] + n)
                 ),
             )
-        return self._apply_waterfill(
-            topk_output, 0, waterfill_is_decode=waterfill_is_decode
-        )
+        return self._apply_waterfill(topk_output, 0, is_decode=is_decode)
 
     def forward_xpu(
         self,
@@ -670,7 +679,7 @@ class TopK(MultiPlatformOp):
         *,
         num_token_non_padded: Optional[torch.Tensor] = None,
         expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
-        waterfill_is_decode: Optional[bool] = None,
+        is_decode: Optional[bool] = None,
     ) -> TopKOutput:
         self.topk_config.torch_native = True
         # [NOTE] XPU device support for topk kernels
@@ -1862,7 +1871,7 @@ def _post_process_topk_ids(
     layer_id: int,
     num_token_non_padded: Optional[torch.Tensor] = None,
     expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
-    lplb_is_decode: bool = False,
+    lplb_decode_load_metric: Optional[str] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     num_fused_shared_experts = topk_config.num_fused_shared_experts
     use_per_rank_shared_slots = has_per_rank_fused_shared_slots(
@@ -1882,19 +1891,30 @@ def _post_process_topk_ids(
             expert_location_dispatch_info is not None
             and getattr(expert_location_dispatch_info, "ep_dispatch_algorithm", None)
             == "lp"
+            and lplb_decode_load_metric != "static"
         ):
             from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
 
             lplb_solver = get_global_lplb_solver(layer_id)
             if lplb_solver is not None:
-                if lplb_is_decode:
+                if lplb_decode_load_metric == "active_experts":
                     lplb_physical_topk_ids = lplb_solver.solve_decode_active_experts(
                         topk_ids
                     )
-                else:
+                elif lplb_decode_load_metric != "static":
                     log2phy_prob = lplb_solver.solve(topk_ids)
 
-        if lplb_physical_topk_ids is not None:
+        use_static_lplb_decode = (
+            lplb_decode_load_metric == "static"
+            and expert_location_dispatch_info is not None
+            and expert_location_dispatch_info.ep_dispatch_algorithm == "lp"
+        )
+        if use_static_lplb_decode:
+            topk_ids = topk_ids_logical_to_physical_static(
+                topk_ids, expert_location_dispatch_info
+            )
+            _mask_topk_ids_padded_region(topk_ids, num_token_non_padded)
+        elif lplb_physical_topk_ids is not None:
             topk_ids = lplb_physical_topk_ids
             _mask_topk_ids_padded_region(topk_ids, num_token_non_padded)
         elif log2phy_prob is not None:
@@ -2040,7 +2060,7 @@ def select_experts(
     layer_id: Optional[int] = None,
     num_token_non_padded: Optional[torch.Tensor] = None,
     expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
-    lplb_is_decode: bool = False,
+    lplb_decode_load_metric: Optional[str] = None,
 ) -> StandardTopKOutput:
     top_k = topk_config.top_k
     use_grouped_topk = topk_config.use_grouped_topk
@@ -2262,7 +2282,7 @@ def select_experts(
         num_token_non_padded=num_token_non_padded,
         layer_id=layer_id,
         expert_location_dispatch_info=expert_location_dispatch_info,
-        lplb_is_decode=lplb_is_decode,
+        lplb_decode_load_metric=lplb_decode_load_metric,
     )
 
     get_global_expert_distribution_recorder().on_select_experts(

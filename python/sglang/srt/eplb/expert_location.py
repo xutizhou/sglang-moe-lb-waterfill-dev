@@ -297,7 +297,7 @@ class ExpertLocationMetadata:
                         else torch.distributed.get_rank() % ep_size
                     ),
                 )
-                if server_args.ep_dispatch_algorithm == "static"
+                if server_args.ep_dispatch_algorithm in ("static", "lp")
                 else None
             ),
         )

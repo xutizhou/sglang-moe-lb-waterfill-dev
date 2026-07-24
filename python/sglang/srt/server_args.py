@@ -2246,6 +2246,14 @@ class ServerArgs:
         "The algorithm to choose ranks for redundant experts in expert parallel.",
         NS("exec.moe"),
     ] = None
+    lplb_decode_load_metric: A[
+        Literal["tokens", "active_experts", "static"],
+        "Decode policy used with --ep-dispatch-algorithm=lp. 'tokens' runs "
+        "the regular token-count LPLB solver, 'active_experts' minimizes the "
+        "maximum number of activated experts per rank, and 'static' skips "
+        "online decode balancing and uses the initialized fixed replica map.",
+        NS("exec.moe"),
+    ] = "tokens"
     init_expert_location: A[str, "Initial location of EP experts.", NS("exec.moe")] = (
         "trivial"
     )

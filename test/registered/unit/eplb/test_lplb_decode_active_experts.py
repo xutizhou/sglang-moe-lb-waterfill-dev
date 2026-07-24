@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from itertools import product
 from types import SimpleNamespace
 
@@ -8,10 +9,12 @@ from sglang.kernels.ops.lplb.cuda_solver import (
     dispatch_decode_integral_torch_reference,
 )
 from sglang.srt.eplb.expert_location_dispatch import (
+    ExpertLocationDispatchInfo,
     _topk_ids_logical_to_physical_active_experts,
     _topk_ids_logical_to_physical_active_experts_torch_reference,
 )
 from sglang.srt.eplb.lplb_solver import LPLBSolver
+from sglang.srt.layers.moe import topk as topk_module
 from sglang.test.ci.ci_register import register_cuda_ci
 
 register_cuda_ci(est_time=3, stage="base-b-kernel-unit", runner_config="1-gpu-large")
@@ -121,6 +124,79 @@ def test_decode_compaction_counts_distinct_ranks(monkeypatch):
         solver.decode_log_replicated,
         torch.tensor([0], dtype=torch.int32),
     )
+
+
+def test_static_decode_skips_online_lplb(monkeypatch):
+    monkeypatch.setattr(topk_module, "_is_cuda", True)
+    topk_ids = torch.tensor([[0, 2], [1, 0]], dtype=torch.int32)
+    topk_weights = torch.ones_like(topk_ids, dtype=torch.float32)
+    info = ExpertLocationDispatchInfo(
+        ep_dispatch_algorithm="lp",
+        partial_logical_to_rank_dispatch_physical_map=torch.tensor(
+            [4, 1, 6], dtype=torch.int64
+        ),
+        partial_logical_to_all_physical_map=torch.tensor(
+            [[0, 4], [1, -1], [2, 6]], dtype=torch.int64
+        ),
+        partial_logical_to_all_physical_map_num_valid=torch.tensor(
+            [2, 1, 2], dtype=torch.int64
+        ),
+        num_physical_experts=8,
+    )
+    config = SimpleNamespace(
+        allow_routed_experts_capture=False,
+        num_fused_shared_experts=0,
+        fused_shared_experts_scaling_factor=None,
+    )
+
+    physical_ids, actual_weights, recorder_ids = topk_module._post_process_topk_ids(
+        topk_ids,
+        topk_weights,
+        config,
+        router_logits=torch.empty((2, 3)),
+        layer_id=0,
+        expert_location_dispatch_info=info,
+        lplb_decode_load_metric="static",
+    )
+
+    expected = torch.tensor([[4, 6], [1, 4]], dtype=torch.int32)
+    torch.testing.assert_close(physical_ids, expected)
+    torch.testing.assert_close(recorder_ids, expected)
+    torch.testing.assert_close(actual_weights, topk_weights)
+
+
+def test_empty_decode_participation_matches_policy(monkeypatch):
+    calls = []
+    solver = SimpleNamespace(
+        solve=lambda ids: calls.append(("tokens", tuple(ids.shape))),
+        solve_decode_active_experts=lambda ids: calls.append(
+            ("active_experts", tuple(ids.shape))
+        ),
+    )
+    monkeypatch.setattr(
+        "sglang.srt.eplb.lplb_solver.get_global_lplb_solver",
+        lambda _layer_id: solver,
+    )
+    monkeypatch.setattr(
+        topk_module,
+        "use_symmetric_memory",
+        lambda *_args, **_kwargs: nullcontext(),
+    )
+    monkeypatch.setattr(topk_module, "get_tp_group", lambda: None)
+    topk = topk_module.TopK.__new__(topk_module.TopK)
+    topk.topk_config = SimpleNamespace(top_k=2, num_fused_shared_experts=0)
+    topk.enable_waterfill = False
+    topk.waterfill_balancer = None
+
+    for policy, expected in (
+        ("tokens", "tokens"),
+        ("active_experts", "active_experts"),
+        ("static", None),
+    ):
+        calls.clear()
+        topk.lplb_decode_load_metric = policy
+        topk.empty_topk_output(torch.device("cpu"), layer_id=0, is_decode=True)
+        assert calls == ([] if expected is None else [(expected, (0, 2))])
 
 
 def test_decode_dispatch_co_locates_each_logical_expert():

@@ -23,7 +23,7 @@ from sglang.srt.runtime_context import get_server_args
 
 @dataclass
 class ExpertLocationDispatchInfo:
-    ep_dispatch_algorithm: Literal["static", "random"]
+    ep_dispatch_algorithm: Literal["static", "dynamic", "fake", "lp"]
     # (num_logical_experts,)
     partial_logical_to_rank_dispatch_physical_map: Optional[torch.Tensor]
     # (num_logical_experts, X)
@@ -108,6 +108,17 @@ def _topk_ids_logical_to_physical_static(
     if physical_topk_ids.dtype != topk_ids.dtype:
         physical_topk_ids = physical_topk_ids.to(topk_ids.dtype)
     return physical_topk_ids
+
+
+def topk_ids_logical_to_physical_static(
+    topk_ids: torch.Tensor, info: ExpertLocationDispatchInfo
+) -> torch.Tensor:
+    """Use the initialized per-rank replica map without online balancing."""
+    if info.partial_logical_to_rank_dispatch_physical_map is None:
+        raise RuntimeError(
+            "Static decode dispatch requires an initialized per-rank replica map."
+        )
+    return _topk_ids_logical_to_physical_static(topk_ids, info)
 
 
 def _topk_ids_logical_to_physical_dynamic(
