@@ -170,7 +170,7 @@ def test_empty_decode_participation_matches_policy(monkeypatch):
     calls = []
     solver = SimpleNamespace(
         solve=lambda ids: calls.append(("tokens", tuple(ids.shape))),
-        solve_decode_active_experts=lambda ids: calls.append(
+        solve_decode_active_experts_p2p=lambda ids: calls.append(
             ("active_experts", tuple(ids.shape))
         ),
     )
@@ -191,7 +191,7 @@ def test_empty_decode_participation_matches_policy(monkeypatch):
 
     for policy, expected in (
         ("tokens", "tokens"),
-        ("active_experts", None),
+        ("active_experts", "active_experts"),
         ("static", None),
     ):
         calls.clear()

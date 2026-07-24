@@ -375,12 +375,13 @@ def _check_decode_direct_with_empty_rank(
     world_size: int,
     device: torch.device,
 ):
-    """Rank-local decode assignment must not require empty-rank participation."""
+    """P2P decode must union active sets and handle an empty source rank."""
     from sglang.kernels.ops.lplb.cuda_solver import (
         dispatch_decode_integral_torch_reference,
     )
 
     solver, _, log2phy, _ = _build_solver()
+    solver.initialize_decode_p2p()
     rank0_topk = torch.tensor(
         [[0, 1], [0, 2], [3, 0], [0, 1]],
         dtype=torch.int32,
@@ -391,21 +392,26 @@ def _check_decode_direct_with_empty_rank(
     else:
         topk_ids = torch.empty((0, TOPK), dtype=torch.int32, device=device)
 
-    actual = solver.solve_decode_active_experts(topk_ids)
-    local_counts = torch.bincount(
-        topk_ids.flatten().long(), minlength=NUM_LOGICAL
+    actual = solver.solve_decode_active_experts_p2p(topk_ids)
+    global_active = (
+        torch.bincount(rank0_topk.flatten().long(), minlength=NUM_LOGICAL) > 0
     ).float()
     expected = dispatch_decode_integral_torch_reference(
         topk_ids.cpu(),
-        local_counts.cpu(),
+        global_active.cpu(),
         log2phy,
         num_physical=NUM_PHY,
         num_gpus=NUM_GPUS,
     ).to(device)
     assert torch.equal(actual, expected), (
-        f"rank {rank}: communication-free decode output disagrees with local "
+        f"rank {rank}: P2P decode output disagrees with global-active "
         f"reference ({(actual != expected).sum().item()} mismatches)"
     )
+
+    # Exercise the monotonic device epoch a second time; this also catches
+    # stale flag values that could let one rank escape the barrier early.
+    actual_second = solver.solve_decode_active_experts_p2p(topk_ids)
+    assert torch.equal(actual_second, expected)
 
 
 def _check_solver_determinism(rank: int, world_size: int, device: torch.device):

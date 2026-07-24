@@ -319,6 +319,10 @@ def _dispatch_decode_integral_module(
                 "dispatch_decode_integral_local",
                 f"dispatch_decode_integral_local<{args}>",
             ),
+            (
+                "dispatch_decode_integral_p2p",
+                f"dispatch_decode_integral_p2p<{args}>",
+            ),
         ],
     )
 
@@ -405,6 +409,73 @@ def dispatch_decode_integral_local(
         replicated_logical,
     )
     return out.view(original_shape).to(topk_ids.dtype)
+
+
+def dispatch_decode_integral_p2p(
+    topk_ids: torch.Tensor,
+    physical_by_rank: torch.Tensor,
+    rank_mask: torch.Tensor,
+    replicated_logical: torch.Tensor,
+    *,
+    local_active: torch.Tensor,
+    active_ptrs_dev: int,
+    flag_ptrs_dev: int,
+    barrier_state: torch.Tensor,
+    rank: int,
+) -> torch.Tensor:
+    """Gather compact active sets with GPU P2P and assign replicas in one launch."""
+    if not topk_ids.is_cuda:
+        raise RuntimeError(
+            "P2P decode dispatch requires CUDA tensors; got topk_ids on "
+            f"{topk_ids.device}."
+        )
+    original_shape = topk_ids.shape
+    flat_ids = topk_ids.reshape(-1).contiguous().to(torch.int32)
+    num_logical, num_gpus = physical_by_rank.shape
+    active_words = (num_logical + 31) // 32
+    assert local_active.shape == (active_words,)
+    assert local_active.dtype == torch.uint32
+    assert physical_by_rank.dtype == torch.int32
+    assert rank_mask.shape == (num_logical,)
+    assert rank_mask.dtype == torch.int32
+    assert replicated_logical.dtype == torch.int32
+    assert barrier_state.dtype == torch.uint32
+    num_replicated = replicated_logical.shape[0]
+
+    out = torch.empty(flat_ids.shape[0], dtype=torch.int32, device=topk_ids.device)
+    module = _dispatch_decode_integral_module(
+        num_logical,
+        num_gpus,
+        num_replicated,
+        DISPATCH_BLOCK_DIM,
+    )
+    module.dispatch_decode_integral_p2p(
+        out,
+        flat_ids,
+        local_active,
+        physical_by_rank,
+        rank_mask,
+        replicated_logical,
+        active_ptrs_dev,
+        flag_ptrs_dev,
+        barrier_state.data_ptr(),
+        rank,
+    )
+    return out.view(original_shape).to(topk_ids.dtype)
+
+
+def warmup_dispatch_decode_integral(
+    num_logical: int,
+    num_gpus: int,
+    num_replicated: int,
+) -> None:
+    """Compile the integral decode module before CUDA-graph capture."""
+    _dispatch_decode_integral_module(
+        num_logical,
+        num_gpus,
+        num_replicated,
+        DISPATCH_BLOCK_DIM,
+    )
 
 
 def dispatch_decode_integral_torch_reference(

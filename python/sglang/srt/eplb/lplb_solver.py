@@ -247,6 +247,67 @@ class LPLBSolver:
         self._log2phy_prob = torch.empty(
             log2phy.shape, dtype=torch.float32, device=device
         )
+        self._decode_p2p_resources = None
+
+    def initialize_decode_p2p(self) -> None:
+        """Create compact symmetric-memory resources for decode active-set union.
+
+        The forward kernel exchanges eight uint32 words for DeepSeek-V3 rather
+        than launching an EP all-reduce over 256 float counters. Initialization
+        is collective over the EP device group and must run on every rank.
+        """
+        if self._decode_p2p_resources is not None:
+            return
+        if self.ep_group is None:
+            raise RuntimeError("P2P decode LPLB requires an EP process group.")
+        if self.ep_group.world_size != self.num_gpus:
+            raise RuntimeError(
+                "P2P decode LPLB EP group size mismatch: "
+                f"{self.ep_group.world_size} != {self.num_gpus}."
+            )
+
+        import torch.distributed._symmetric_memory as symm_mem
+
+        from sglang.kernels.ops.communication.inkling_all_reduce import (
+            STATE_SIZE,
+            flags_numel,
+        )
+        from sglang.kernels.ops.lplb.cuda_solver import (
+            warmup_dispatch_decode_integral,
+        )
+
+        device = self.decode_physical_by_rank.device
+        group = self.ep_group.device_group
+        active_words = (self.num_logical + 31) // 32
+        with torch.inference_mode(False), torch.no_grad():
+            local_active = symm_mem.empty(
+                active_words, dtype=torch.uint32, device=device
+            )
+            flags = symm_mem.empty(
+                flags_numel(self.num_gpus),
+                dtype=torch.uint32,
+                device=device,
+            )
+        local_active.zero_()
+        flags.zero_()
+        active_handle = symm_mem.rendezvous(local_active, group=group)
+        flag_handle = symm_mem.rendezvous(flags, group=group)
+        # Ensure no peer can enter the first device-side epoch barrier while
+        # another rank is still zeroing its symmetric flag slots.
+        flag_handle.barrier()
+        barrier_state = torch.zeros(STATE_SIZE, dtype=torch.uint32, device=device)
+        warmup_dispatch_decode_integral(
+            self.num_logical,
+            self.num_gpus,
+            self.decode_log_replicated.numel(),
+        )
+        self._decode_p2p_resources = (
+            local_active,
+            flags,
+            barrier_state,
+            active_handle,
+            flag_handle,
+        )
 
     def solve(
         self,
@@ -304,6 +365,31 @@ class LPLBSolver:
             self.decode_physical_by_rank,
             self.decode_rank_mask,
             self.decode_log_replicated,
+        )
+
+    def solve_decode_active_experts_p2p(self, topk_ids: torch.Tensor) -> torch.Tensor:
+        """Union active sets with fused GPU P2P and balance replicas globally."""
+        if self._decode_p2p_resources is None:
+            raise RuntimeError(
+                "P2P decode LPLB resources were not initialized at model setup."
+            )
+        from sglang.kernels.ops.lplb.cuda_solver import (
+            dispatch_decode_integral_p2p,
+        )
+
+        local_active, _, barrier_state, active_handle, flag_handle = (
+            self._decode_p2p_resources
+        )
+        return dispatch_decode_integral_p2p(
+            topk_ids,
+            self.decode_physical_by_rank,
+            self.decode_rank_mask,
+            self.decode_log_replicated,
+            local_active=local_active,
+            active_ptrs_dev=active_handle.buffer_ptrs_dev,
+            flag_ptrs_dev=flag_handle.buffer_ptrs_dev,
+            barrier_state=barrier_state,
+            rank=self.ep_group.rank_in_group,
         )
 
     def _count_and_all_reduce(self, topk_ids: torch.Tensor) -> torch.Tensor:

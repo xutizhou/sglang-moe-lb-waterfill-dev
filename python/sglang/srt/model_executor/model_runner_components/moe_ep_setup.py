@@ -88,6 +88,9 @@ def init_lplb_solvers(*, model_config: ModelConfig) -> None:
     metadata = get_global_expert_location_metadata()
     if metadata is None:
         return
+    from sglang.srt.runtime_context import get_server_args
+
+    use_decode_p2p = get_server_args().lplb_decode_load_metric == "active_experts"
     clear_global_lplb_solvers()
     ep_group = get_moe_ep_group()
     for lid in range(metadata.num_layers):
@@ -100,6 +103,8 @@ def init_lplb_solvers(*, model_config: ModelConfig) -> None:
                 metadata.logical_to_all_physical_map_num_valid[lid]
             ),
         )
+        if use_decode_p2p:
+            solver.initialize_decode_p2p()
         set_global_lplb_solver(lid, solver)
     logger.info(f"Initialized LPLB solvers for {metadata.num_layers} layers")
 
