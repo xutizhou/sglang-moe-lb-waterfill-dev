@@ -12,7 +12,7 @@
 # limitations under the License.
 # ==============================================================================
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 import torch
@@ -23,7 +23,7 @@ from sglang.srt.server_args import get_global_server_args
 
 @dataclass
 class ExpertLocationDispatchInfo:
-    ep_dispatch_algorithm: Literal["static", "random"]
+    ep_dispatch_algorithm: Literal["static", "dynamic", "fake", "lp"]
     # (num_logical_experts,)
     partial_logical_to_rank_dispatch_physical_map: Optional[torch.Tensor]
     # (num_logical_experts, X)
@@ -31,6 +31,11 @@ class ExpertLocationDispatchInfo:
     # (num_logical_experts,)
     partial_logical_to_all_physical_map_num_valid: torch.Tensor
     num_physical_experts: int
+    # Per-layer LPLB runtime when ``ep_dispatch_algorithm == "lp"``; ``None``
+    # otherwise. Typed loosely so this dataclass does not pull in
+    # moe_load_balancer at import time — the SGLang baseline stays usable
+    # without the SDK installed unless the LP flag is set.
+    lplb_runtime: object = field(default=None, repr=False)
 
     @classmethod
     def init_new(cls, layer_id: int):
@@ -40,6 +45,12 @@ class ExpertLocationDispatchInfo:
 
         if ep_dispatch_algorithm is None:
             return None
+
+        lplb_runtime = None
+        if ep_dispatch_algorithm == "lp":
+            from sglang.srt.eplb.moelb_lplb_registry import get_global_lplb_runtime
+
+            lplb_runtime = get_global_lplb_runtime(layer_id)
 
         return cls(
             ep_dispatch_algorithm=ep_dispatch_algorithm,
@@ -58,6 +69,7 @@ class ExpertLocationDispatchInfo:
                 layer_id, :
             ],
             num_physical_experts=expert_location_metadata.num_physical_experts,
+            lplb_runtime=lplb_runtime,
         )
 
 
@@ -83,6 +95,18 @@ def topk_ids_logical_to_physical(
         return _topk_ids_logical_to_physical_static(topk_ids, info)
     if info.ep_dispatch_algorithm in ["dynamic", "fake"]:
         return _topk_ids_logical_to_physical_dynamic(topk_ids, info)
+    if info.ep_dispatch_algorithm == "lp":
+        # LP dispatch happens upstream in topk._post_process_topk_ids, where
+        # the per-layer LPLBRuntime runs the full pipeline (count + AR +
+        # solve + dispatch) and writes physical IDs directly. By the time
+        # this function is reached for an "lp" info, the topk_ids would
+        # already be physical (a pass-through case the caller should have
+        # short-circuited), or something has wired the dispatch path wrong.
+        raise RuntimeError(
+            "topk_ids_logical_to_physical called with ep_dispatch_algorithm='lp'; "
+            "the LP path is materialized inside topk._post_process_topk_ids "
+            "via LPLBRuntime.route — this function must not be reached for LP."
+        )
     raise NotImplementedError(f"Unknown algorithm {info.ep_dispatch_algorithm}")
 
 

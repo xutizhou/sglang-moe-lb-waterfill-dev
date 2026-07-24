@@ -603,7 +603,7 @@ class ServerArgs:
     enable_aiter_allreduce_fusion: bool = False
     deepep_mode: Literal["auto", "normal", "low_latency"] = "auto"
     ep_num_redundant_experts: int = 0
-    ep_dispatch_algorithm: Optional[Literal["static", "dynamic", "fake"]] = None
+    ep_dispatch_algorithm: Optional[Literal["static", "dynamic", "fake", "lp"]] = None
     init_expert_location: str = "trivial"
     enable_eplb: bool = False
     eplb_algorithm: str = "auto"
@@ -3200,6 +3200,21 @@ class ServerArgs:
 
         if self.enable_eplb:
             assert self.ep_size > 1
+
+        # LPLB ("lp") is routed through the moe_load_balancer SDK rather than
+        # a native SGLang solver class. Fail fast at startup if it isn't
+        # importable so the failure surfaces before the first forward pass.
+        if self.ep_dispatch_algorithm == "lp":
+            try:
+                import moe_load_balancer  # noqa: F401
+            except ImportError as exc:
+                raise RuntimeError(
+                    "--ep-dispatch-algorithm=lp requires the moe_load_balancer "
+                    "package. Install it from "
+                    "https://github.com/xutizhou/moe_load_balancer (branch "
+                    "lplb-impl or main once merged) into the active "
+                    "environment."
+                ) from exc
 
     def _handle_elastic_ep(self):
         if self.elastic_ep_backend is not None:
