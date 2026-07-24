@@ -181,10 +181,31 @@ class ExpertLocationMetadata:
             logical_count = torch.tensor(logical_count)
         if len(logical_count.shape) == 2:
             logical_count = logical_count.unsqueeze(0)
+        decode_logical_count = logical_count
+        decode_distribution_path = getattr(
+            server_args, "lplb_decode_expert_distribution", None
+        )
+        if decode_distribution_path is not None:
+            decode_data = torch.load(
+                decode_distribution_path,
+                map_location="cpu",
+                weights_only=True,
+            )
+            if not isinstance(decode_data, dict) or "logical_count" not in decode_data:
+                raise ValueError(
+                    "lplb_decode_expert_distribution must contain logical_count"
+                )
+            decode_logical_count = decode_data["logical_count"]
+            if not isinstance(decode_logical_count, torch.Tensor):
+                decode_logical_count = torch.tensor(decode_logical_count)
+        if decode_logical_count.dim() != 3:
+            raise ValueError(
+                "Decode expert distribution logical_count must have shape "
+                "(chunks, layers, logical_experts), got "
+                f"{tuple(decode_logical_count.shape)}"
+            )
         decode_activation_frequency = (
-            (logical_count > 0).to(torch.float32).mean(dim=0)
-            if logical_count.dim() == 3
-            else None
+            (decode_logical_count > 0).to(torch.float32).mean(dim=0)
         )
         logical_count = logical_count.to(server_args.device)
 

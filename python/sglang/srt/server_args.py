@@ -2262,6 +2262,14 @@ class ServerArgs:
         "logical expert and 0 is equivalent to static decode dispatch.",
         NS("exec.moe"),
     ] = 16
+    lplb_decode_expert_distribution: A[
+        Optional[str],
+        "Optional expert-distribution .pt file used only to rank redundant "
+        "logical experts for active-expert decode dispatch. This keeps EPLB "
+        "placement based on --init-expert-location token counts while decode "
+        "uses statistics collected from a representative decode workload.",
+        NS("exec.moe"),
+    ] = None
     init_expert_location: A[str, "Initial location of EP experts.", NS("exec.moe")] = (
         "trivial"
     )
