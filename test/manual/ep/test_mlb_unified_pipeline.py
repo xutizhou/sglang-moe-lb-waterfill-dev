@@ -79,8 +79,13 @@ def _run_l1_eplb(mlb, device):
 
 
 def _run_l2_mode(mlb, recorder, rank, mode, device):
-    enable_lplb = mode in ("lplb", "combined")
-    enable_waterfill = mode in ("waterfill", "waterfill_dynamic", "combined")
+    enable_lplb = mode in ("lplb", "combined", "combined_idle")
+    enable_waterfill = mode in (
+        "waterfill",
+        "waterfill_dynamic",
+        "combined",
+        "combined_idle",
+    )
     dynamic_waterfill = mode == "waterfill_dynamic"
     glue.get_global_server_args = lambda: SimpleNamespace(
         ep_dispatch_algorithm="lp" if enable_lplb else "static",
@@ -90,28 +95,40 @@ def _run_l2_mode(mlb, recorder, rank, mode, device):
         get=lambda: dynamic_waterfill
     )
 
-    logical_ids = (
-        torch.tensor([[0, 1], [0, 1]], dtype=torch.int32, device=device)
-        if rank == 0
-        else torch.tensor([[0, 1], [1, 1]], dtype=torch.int32, device=device)
-    )
+    if mode == "combined_idle" and rank != 0:
+        logical_ids = torch.empty((0, 2), dtype=torch.int32, device=device)
+    elif rank == 0:
+        logical_ids = torch.tensor(
+            [[0, 1], [0, 1]], dtype=torch.int32, device=device
+        )
+    else:
+        logical_ids = torch.tensor(
+            [[0, 1], [1, 1]], dtype=torch.int32, device=device
+        )
+    num_tokens = logical_ids.shape[0]
     output = glue.route_topk_with_mlb(
         moe_load_balancer=mlb,
         layer_id=0,
         topk_output=StandardTopKOutput(
-            topk_weights=torch.ones((2, 2), dtype=torch.float32, device=device),
+            topk_weights=torch.ones(
+                (num_tokens, 2), dtype=torch.float32, device=device
+            ),
             topk_ids=logical_ids,
-            router_logits=torch.zeros((2, 2), dtype=torch.float32, device=device),
+            router_logits=torch.zeros(
+                (num_tokens, 2), dtype=torch.float32, device=device
+            ),
         ),
-        num_tokens=2,
-        num_token_non_padded=torch.tensor(2, dtype=torch.int32, device=device),
+        num_tokens=num_tokens,
+        num_token_non_padded=torch.tensor(
+            num_tokens, dtype=torch.int32, device=device
+        ),
         forward_batch=None,
         routed_scaling_factor=1.0,
     )
 
     expected_width = 3 if enable_waterfill else 2
-    assert output.topk_ids.shape == (2, expected_width)
-    assert recorder.last_ids.shape == (2, 2)
+    assert output.topk_ids.shape == (num_tokens, expected_width)
+    assert recorder.last_ids.shape == (num_tokens, 2)
     assert torch.all((recorder.last_ids >= 0) & (recorder.last_ids < 4))
 
 
@@ -137,7 +154,13 @@ def main():
         }
     )
     _run_l1_eplb(mlb, device)
-    for mode in ("lplb", "waterfill", "waterfill_dynamic", "combined"):
+    for mode in (
+        "lplb",
+        "waterfill",
+        "waterfill_dynamic",
+        "combined",
+        "combined_idle",
+    ):
         _run_l2_mode(mlb, recorder, rank, mode, device)
         dist.barrier()
 
