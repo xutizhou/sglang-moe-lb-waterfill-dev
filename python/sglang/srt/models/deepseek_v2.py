@@ -631,7 +631,7 @@ class DeepseekV2MoE(nn.Module):
         self._fuse_shared_experts_inside_sbo = SboFlags.fuse_shared_experts_inside_sbo()
 
     def get_moe_weights(self):
-        return [
+        weights = [
             x.data
             for name, x in self.experts.named_parameters()
             if name not in ["correction_bias"]
@@ -639,6 +639,14 @@ class DeepseekV2MoE(nn.Module):
                 name, x, self.experts.num_local_experts
             )
         ]
+        if is_deepep_class_backend() and self.num_fused_shared_experts > 0:
+            # DeepEP stores one fused shared-expert slot after this rank's
+            # routed experts. EPLB must migrate only routed expert weights;
+            # the shared slot stays fixed on its home rank.
+            weights = [
+                weight[: -self.num_fused_shared_experts] for weight in weights
+            ]
+        return weights
 
     def forward(
         self,
