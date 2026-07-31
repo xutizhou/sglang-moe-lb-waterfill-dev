@@ -953,30 +953,6 @@ class DeepseekV2MoE(nn.Module):
                 **topk_kwargs,
             )
         else:
-            # Empty-token branch: under DP-attention, this rank has no work
-            # for this MoE layer. The moe_load_balancer LPLBRuntime contains
-            # an EP all-reduce inside its route() call; every rank must
-            # participate or the collective deadlocks. Drive the runtime on
-            # an empty topk so the collective completes consistently across
-            # ranks; the policy's empty-batch fast path skips the LP solve.
-            _info = ExpertLocationDispatchInfo.init_new(layer_id=self.layer_id)
-            if _info is not None and _info.lplb_runtime is not None:
-                topk = self.top_k
-                _empty_ids = torch.empty(
-                    (0, topk), dtype=torch.int32, device=hidden_states.device
-                )
-                _empty_weights = torch.empty(
-                    (0, topk), dtype=torch.float32, device=hidden_states.device
-                )
-                _empty_logits = torch.empty(
-                    (0, topk), dtype=torch.float32, device=hidden_states.device
-                )
-                from sglang.srt.layers.moe.topk import StandardTopKOutput
-
-                _info.lplb_runtime.route(
-                    StandardTopKOutput(_empty_weights, _empty_ids, _empty_logits)
-                )
-
             topk_output = self.topk.empty_topk_output(hidden_states.device)
             if (
                 is_deepep_class_backend()
@@ -1216,27 +1192,6 @@ class DeepseekV2MoE(nn.Module):
                     ),
                 )
         else:
-            # Same empty-rank participation as forward_deepep: drive the
-            # LPLBRuntime on an empty topk so the EP all-reduce inside
-            # route() completes consistently across ranks under DP-attention.
-            _info = ExpertLocationDispatchInfo.init_new(layer_id=self.layer_id)
-            if _info is not None and _info.lplb_runtime is not None:
-                topk = self.top_k
-                _empty_ids = torch.empty(
-                    (0, topk), dtype=torch.int32, device=hidden_states.device
-                )
-                _empty_weights = torch.empty(
-                    (0, topk), dtype=torch.float32, device=hidden_states.device
-                )
-                _empty_logits = torch.empty(
-                    (0, topk), dtype=torch.float32, device=hidden_states.device
-                )
-                from sglang.srt.layers.moe.topk import StandardTopKOutput
-
-                _info.lplb_runtime.route(
-                    StandardTopKOutput(_empty_weights, _empty_ids, _empty_logits)
-                )
-
             state.topk_output = self.topk.empty_topk_output(hidden_states.device)
 
     def op_dispatch_a(self, state):

@@ -142,14 +142,15 @@ class ExpertLocationMetadata:
 
     @staticmethod
     def init_by_eplb(
-        server_args: ServerArgs, model_config: ModelConfig, logical_count: torch.Tensor
+        server_args: ServerArgs,
+        model_config: ModelConfig,
+        logical_count: torch.Tensor,
+        moe_load_balancer,
     ):
-        # Plain-data wrapper around moe_load_balancer's framework-neutral
-        # ``SGLangEPLBRuntime.compute_placement``. This static method does
-        # all sglang-shape work (server_args / model_config / ELM
-        # extraction + writeback); MLB only sees plain scalars + tensors.
-        from moe_load_balancer.adapters.sglang.eplb import ensure_default_runtime
-        from moe_load_balancer.core.types import RebalancePolicyConfig
+        from moe_load_balancer.adapters.sglang import (
+            to_placement_request,
+            to_sglang_maps,
+        )
 
         if not isinstance(logical_count, torch.Tensor):
             logical_count = torch.tensor(logical_count)
@@ -161,18 +162,9 @@ class ExpertLocationMetadata:
         if common is None:
             return None
 
-        # ensure_default_runtime installs a configured runtime if no
-        # caller has done so yet (e.g. cold-start before
-        # _StatAccumulator.__init__). The first caller wins; subsequent
-        # calls reuse the same instance.
-        runtime = ensure_default_runtime(
-            rebalance_policy=RebalancePolicyConfig(
-                recording_window_size=server_args.expert_distribution_recorder_buffer_size,
-                min_utilization_threshold=server_args.eplb_min_rebalancing_utilization_threshold,
-            ),
-        )
-
-        plan = runtime.compute_placement(
+        if moe_load_balancer is None:
+            raise RuntimeError("EPLB requires the ModelRunner MoELoadBalancer.")
+        request = to_placement_request(
             logical_count=logical_count,
             num_physical_experts=common["num_physical_experts"],
             num_local_physical_experts=(
@@ -183,16 +175,16 @@ class ExpertLocationMetadata:
             algorithm=server_args.eplb_algorithm,
             active_ranks=_mlb_eplb_active_ranks(server_args),
         )
-        if plan is None:
-            return None
+        plan = moe_load_balancer.plan_placement(request)
+        maps = to_sglang_maps(plan)
 
         return ExpertLocationMetadata._init_raw(
             server_args=server_args,
             ep_size=common["ep_size"],
-            physical_to_logical_map=plan["physical_to_logical_map"].to(
+            physical_to_logical_map=maps.physical_to_logical_map.to(
                 server_args.device
             ),
-            logical_to_all_physical_map=plan["logical_to_all_physical_map"].to(
+            logical_to_all_physical_map=maps.logical_to_all_physical_map.to(
                 server_args.device
             ),
         )
@@ -595,6 +587,7 @@ def compute_initial_expert_location_metadata(
     server_args: ServerArgs,
     model_config: ModelConfig,
     moe_ep_rank: int,
+    moe_load_balancer=None,
 ) -> Optional[ExpertLocationMetadata]:
     data = server_args.init_expert_location
     if data == "trivial":
@@ -625,7 +618,10 @@ def compute_initial_expert_location_metadata(
             "init_expert_location from init_by_eplb using ServerArgs.init_expert_location"
         )
         return ExpertLocationMetadata.init_by_eplb(
-            server_args, model_config, logical_count=data_dict["logical_count"]
+            server_args,
+            model_config,
+            logical_count=data_dict["logical_count"],
+            moe_load_balancer=moe_load_balancer,
         )
     else:
         raise NotImplementedError(

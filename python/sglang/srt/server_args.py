@@ -3215,6 +3215,12 @@ class ServerArgs:
                     "lplb-impl or main once merged) into the active "
                     "environment."
                 ) from exc
+            if not self.enable_deepep_waterfill and not self.disable_shared_experts_fusion:
+                logger.warning(
+                    "Shared-expert fusion is disabled for standalone LPLB; "
+                    "enable Waterfill to route the fused shared expert through MLB."
+                )
+                self.disable_shared_experts_fusion = True
 
     def _handle_elastic_ep(self):
         if self.elastic_ep_backend is not None:
