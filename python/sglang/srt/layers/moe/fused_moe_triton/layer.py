@@ -622,9 +622,30 @@ class FusedMoE(torch.nn.Module):
             )
             return
 
-        if self._has_fused_shared and expert_id >= self._num_global_routed:
-            # This is a shared expert.
-            physical_expert_ids = [expert_id]
+        if (
+            self._has_fused_shared
+            and expert_id >= global_expert_location_metadata.num_logical_experts
+        ):
+            # Checkpoint shared experts are numbered immediately after the
+            # logical routed experts.  EPLB can add redundant *physical*
+            # routed experts, so ``self._num_global_routed`` may be larger
+            # than that checkpoint boundary.  Replicate each shared expert
+            # into the fixed shared slot on every EP rank; Waterfill may send
+            # a token's shared-expert work to any of those ranks.
+            shared_expert_id = (
+                expert_id - global_expert_location_metadata.num_logical_experts
+            )
+            if shared_expert_id >= self.num_fused_shared_experts:
+                raise ValueError(
+                    f"Shared expert id {shared_expert_id} exceeds "
+                    f"num_fused_shared_experts={self.num_fused_shared_experts}."
+                )
+            physical_expert_ids = [
+                self._num_global_routed
+                + ep_rank * self.num_fused_shared_experts
+                + shared_expert_id
+                for ep_rank in range(self.moe_ep_size)
+            ]
         else:
             require_global_experts = getattr(
                 param, "_sglang_require_global_experts", False

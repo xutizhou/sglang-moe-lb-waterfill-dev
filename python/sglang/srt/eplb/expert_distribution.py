@@ -322,6 +322,10 @@ class _SinglePassGatherer(ABC):
                 return _DeepepLowLatencySinglePassGatherer(
                     expert_location_metadata, rank
                 )
+            elif server_args.deepep_mode == "auto":
+                return _DeepepAutoSinglePassGatherer(
+                    expert_location_metadata, rank
+                )
             else:
                 raise NotImplementedError
 
@@ -541,7 +545,14 @@ class _DeepepNormalSinglePassGatherer(_LayerBasedCpuSinglePassGatherer):
         num_tokens_per_expert,
     ):
         assert isinstance(local_physical_count_of_layer, list)
-        self._on_layer_data(layer_idx, local_physical_count_of_layer)
+        # DeepEP appends fixed fused-shared slots after the routed physical
+        # experts.  EPLB placement statistics cover routed experts only.
+        self._on_layer_data(
+            layer_idx,
+            local_physical_count_of_layer[
+                : self._expert_location_metadata.num_local_physical_experts
+            ],
+        )
 
     def collect(self) -> Dict:
         local_physical_count = super()._collect_objects(
@@ -564,7 +575,55 @@ class _DeepepLowLatencySinglePassGatherer(_LayerBasedGpuSinglePassGatherer):
         self, layer_idx: int, local_physical_count_of_layer: torch.Tensor
     ):
         # Most naive implementation, can optimize later
-        self._data[layer_idx, :] += local_physical_count_of_layer
+        self._data[layer_idx, :] += local_physical_count_of_layer[
+            : self._expert_location_metadata.num_local_physical_experts
+        ]
+
+
+class _DeepepAutoSinglePassGatherer(_LayerBasedGpuSinglePassGatherer):
+    """Gather exact physical counts for DeepEP's per-forward dispatch mode.
+
+    DeepEP auto mode resolves to normal whenever the DP batch contains extend
+    tokens, and to low-latency otherwise. Mirror that decision here so normal
+    forwards use physical IDs from select-experts while low-latency forwards use
+    the local physical counts returned by dispatch. Counting both hooks would
+    double count low-latency forwards because select-experts is also invoked on
+    that path.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs, enable_global_physical_experts=True)
+        self._is_extend_in_batch = False
+
+    def on_forward_pass_start(self, forward_batch: ForwardBatch):
+        self._is_extend_in_batch = forward_batch.is_extend_in_batch
+
+    def on_select_experts(self, layer_idx: int, topk_ids: torch.Tensor):
+        if not self._is_extend_in_batch:
+            return
+
+        topk_ids = topk_ids.flatten()
+        mask = topk_ids != -1
+        self._data[layer_idx, :].scatter_add_(
+            dim=0, index=topk_ids.masked_fill(~mask, 0).long(), src=mask.int()
+        )
+
+    def on_deepep_dispatch_low_latency(
+        self, layer_idx: int, local_physical_count_of_layer: torch.Tensor
+    ):
+        if self._is_extend_in_batch:
+            return
+
+        num_local_physical_experts = (
+            self._expert_location_metadata.num_local_physical_experts
+        )
+        start = self._rank * num_local_physical_experts
+        end = start + num_local_physical_experts
+        # Waterfill's fused shared expert is the final local DeepEP slot.  It
+        # is not part of EPLB's routed-expert placement statistics.
+        self._data[layer_idx, start:end] += local_physical_count_of_layer[
+            :num_local_physical_experts
+        ]
 
 
 def _convert_per_token_to_global_physical_count(
