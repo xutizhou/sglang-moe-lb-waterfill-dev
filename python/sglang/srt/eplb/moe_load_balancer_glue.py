@@ -6,6 +6,13 @@ from typing import Optional
 
 import torch
 
+from moe_load_balancer import RoutingPolicyConfig
+from moe_load_balancer.adapters.sglang import (
+    count_logical_experts,
+    to_placement_snapshot,
+    to_routing_request,
+    to_sglang_routing_output,
+)
 from sglang.srt.distributed import get_moe_ep_group
 from sglang.srt.distributed.communication_op import (
     moe_expert_parallel_all_reduce,
@@ -42,12 +49,6 @@ def route_topk_with_mlb(
 ):
     """Run the configured L2 pipeline and materialize SGLang TopK output."""
 
-    from moe_load_balancer import RoutingPolicyConfig
-    from moe_load_balancer.adapters.sglang import (
-        to_placement_snapshot,
-        to_routing_request,
-        to_sglang_routing_output,
-    )
     from sglang.srt.layers.moe.topk import StandardTopKOutput
 
     server_args = get_global_server_args()
@@ -133,18 +134,7 @@ def _global_logical_count(
     logical_topk_ids: torch.Tensor,
     num_logical_experts: int,
 ) -> torch.Tensor:
-    valid = logical_topk_ids >= 0
-    safe_ids = logical_topk_ids.clamp(min=0).to(torch.int64)
-    local_count = torch.zeros(
-        num_logical_experts,
-        dtype=torch.float32,
-        device=logical_topk_ids.device,
-    )
-    local_count.scatter_add_(
-        0,
-        safe_ids.reshape(-1),
-        valid.reshape(-1).to(local_count.dtype),
-    )
+    local_count = count_logical_experts(logical_topk_ids, num_logical_experts)
     return get_moe_ep_group().all_reduce(local_count)
 
 

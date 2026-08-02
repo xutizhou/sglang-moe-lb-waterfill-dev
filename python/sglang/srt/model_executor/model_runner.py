@@ -1600,7 +1600,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
 
         routing_policies = {}
         if server_args.ep_dispatch_algorithm == "lp":
-            from moe_load_balancer.policies.l2.lpcf import LPCFL2Router
+            from moe_load_balancer.adapters.sglang import SGLangFusedIPMBackend
+            from moe_load_balancer.policies.l2.lplb import LPLBL2Router
 
             common = ExpertLocationMetadata._init_common(
                 server_args,
@@ -1608,9 +1609,10 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             )
             if common is None:
                 raise ValueError("LPLB requires MoE expert-location metadata.")
-            routing_policies["lplb"] = LPCFL2Router(
+            routing_policies["lplb"] = LPLBL2Router(
                 ep_size=common["ep_size"],
                 num_physical_experts=common["num_physical_experts"],
+                ipm_backend=SGLangFusedIPMBackend(),
             )
 
         if server_args.enable_deepep_waterfill:
@@ -1633,11 +1635,24 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         if self.moe_load_balancer is None:
             raise RuntimeError("MLB L2 is enabled but MoELoadBalancer was not created.")
 
+        placement_metadata = get_global_expert_location_metadata()
+        if placement_metadata is None:
+            raise RuntimeError("MLB L2 requires committed expert metadata.")
+        if self.server_args.ep_dispatch_algorithm == "lp":
+            from moe_load_balancer.adapters.sglang import to_placement_snapshot
+
         num_prepared = 0
         for module in self.model.modules():
             if not isinstance(module, TopK):
                 continue
             module.moe_load_balancer = self.moe_load_balancer
+            if self.server_args.ep_dispatch_algorithm == "lp":
+                if module.layer_id is None:
+                    raise RuntimeError("LPLB requires every MoE TopK to have layer_id.")
+                self.moe_load_balancer.prepare_routing_layer(
+                    "lplb",
+                    to_placement_snapshot(placement_metadata, module.layer_id),
+                )
             num_prepared += 1
         if num_prepared:
             log_info_on_rank0(
