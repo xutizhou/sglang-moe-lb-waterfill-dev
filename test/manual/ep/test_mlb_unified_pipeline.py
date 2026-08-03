@@ -14,8 +14,11 @@ import torch
 import torch.distributed as dist
 
 from moe_load_balancer import MoELoadBalancer
-from moe_load_balancer.adapters.sglang import to_placement_request
-from moe_load_balancer.policies.l2.lpcf import LPCFL2Router
+from moe_load_balancer.adapters.sglang import (
+    SGLangLPLBKernels,
+    to_placement_request,
+)
+from moe_load_balancer.policies.l2.lplb import LPLBL2Router
 from moe_load_balancer.policies.l2.waterfill import WaterfillL2Router
 from sglang.srt.eplb import moe_load_balancer_glue as glue
 from sglang.srt.layers.moe.topk import StandardTopKOutput
@@ -149,7 +152,10 @@ def main():
 
     mlb = MoELoadBalancer(
         routing_policies={
-            "lplb": LPCFL2Router(ep_size=2, num_physical_experts=4),
+            "lplb": LPLBL2Router(
+                kernels=SGLangLPLBKernels(),
+                num_gpus=2,
+            ),
             "waterfill": WaterfillL2Router(source_rank=rank, world_size=2),
         }
     )
