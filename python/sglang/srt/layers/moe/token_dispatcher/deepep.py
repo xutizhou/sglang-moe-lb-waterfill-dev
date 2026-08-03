@@ -29,6 +29,7 @@ from sglang.srt.layers.moe.utils import (
 from sglang.srt.utils import (
     get_bool_env_var,
     is_blackwell,
+    is_flashinfer_available,
     is_hip,
     is_npu,
     load_json_config,
@@ -59,6 +60,15 @@ import torch.distributed as dist
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and is_hip()
 
 logger = logging.getLogger(__name__)
+
+
+def _is_mnnvl_fabric_supported() -> bool:
+    if not is_flashinfer_available():
+        return False
+
+    from flashinfer.comm.mnnvl import is_mnnvl_fabric_supported
+
+    return is_mnnvl_fabric_supported(torch.cuda.current_device())
 
 
 def _deepep_precompile_tp_barrier() -> None:
@@ -233,8 +243,7 @@ class DeepEPBuffer:
             num_rdma_bytes,
             low_latency_mode=deepep_mode.enable_low_latency(),
             num_qps_per_rank=num_qps_per_rank,
-            # TODO can be false when unneeded
-            allow_mnnvl=True,
+            allow_mnnvl=_is_mnnvl_fabric_supported(),
         )
         return cls._buffer
 

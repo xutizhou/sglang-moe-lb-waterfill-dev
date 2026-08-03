@@ -61,69 +61,23 @@ class EPLBManager:
             torch.get_device_module().synchronize()
             time_start = time.time()
 
-        # Phase 2.B: drain + skip-gate in one MLB call. MLB owns the
-        # threshold (RebalancePolicyConfig.min_utilization_threshold);
-        # sglang provides the utilization rate as a plain float from its
-        # own _UtilizationRateAccumulatorMixin.
-        from moe_load_balancer.adapters.sglang.eplb import get_default_runtime
-
-        mlb_runtime = get_default_runtime()
-
-        # Pull windowed utilization from sglang's recorder (computed by
-        # the mixin during per-forward append). Returns None if metric is
-        # disabled or threshold is the 1.0 short-circuit -- in that case
-        # MLB degrades to "always rebalance".
-        observed_utilization = (
-            get_global_expert_distribution_recorder().get_average_utilization_rate()
+        dump_record_output = get_global_expert_distribution_recorder().dump_record(
+            output_mode="object"
         )
+        logical_count = dump_record_output["logical_count"]
+        average_utilization_rate_over_window = dump_record_output[
+            "average_utilization_rate_over_window"
+        ]
 
-        drained = mlb_runtime.drain_for_rebalance(
-            observed_utilization_rate=observed_utilization,
-        )
-        if drained is None:
-            logger.info(
-                "[EPLBManager] rebalance skipped (no data or utilization "
-                f"{observed_utilization} above threshold)"
-            )
+        # Check whether rebalancing is needed
+        if not self._check_rebalance_needed(average_utilization_rate_over_window):
             return
 
-        # Cross-rank reduction (distributed comm is rightly sglang's job).
-        logical_count = drained["logical_count"]
-        torch.distributed.all_reduce(logical_count, op=torch.distributed.ReduceOp.SUM)
-
-        # Compute new placement (MLB) + sglang-shape writeback.
-        from sglang.srt.eplb.expert_location import (
-            ExpertLocationMetadata as _ELM,
-            _mlb_eplb_active_ranks,
-        )
-
-        common = _ELM._init_common(self._server_args, self._model_runner.model_config)
-        if common is None:
-            return
-
-        plan = mlb_runtime.compute_placement(
-            logical_count=logical_count,
-            num_physical_experts=common["num_physical_experts"],
-            num_local_physical_experts=(
-                common["num_physical_experts"] // common["ep_size"]
-            ),
-            num_groups=common["model_config_for_expert_location"].num_groups,
-            num_nodes=self._server_args.nnodes,
-            algorithm=self._server_args.eplb_algorithm,
-            active_ranks=_mlb_eplb_active_ranks(self._server_args),
-        )
-        if plan is None:
-            return
-
-        expert_location_metadata = _ELM._init_raw(
-            server_args=self._server_args,
-            ep_size=common["ep_size"],
-            physical_to_logical_map=plan["physical_to_logical_map"].to(
-                self._server_args.device
-            ),
-            logical_to_all_physical_map=plan["logical_to_all_physical_map"].to(
-                self._server_args.device
-            ),
+        expert_location_metadata = ExpertLocationMetadata.init_by_eplb(
+            self._server_args,
+            self._model_runner.model_config,
+            logical_count,
+            self._model_runner.moe_load_balancer,
         )
 
         update_layer_ids_chunks = self._compute_update_layer_ids_chunks()
@@ -135,12 +89,27 @@ class EPLBManager:
                 update_layer_ids=update_layer_ids,
             )
 
-        msg = f"[EPLBManager] rebalance end"
+        msg = "[EPLBManager] rebalance end"
         if enable_timing:
             torch.get_device_module().synchronize()
             time_end = time.time()
             msg += f" time={time_end - time_start:.3f}s"
         logger.info(msg)
+
+    def _check_rebalance_needed(self, average_utilization_rate_over_window):
+        if average_utilization_rate_over_window is None:
+            return True
+
+        if (
+            average_utilization_rate_over_window
+            > self._server_args.eplb_min_rebalancing_utilization_threshold
+        ):
+            logger.info(
+                f"[EPLBManager] Skipped ep rebalancing: current GPU utilization {average_utilization_rate_over_window:.2f} > minimum rebalance threshold {self._server_args.eplb_min_rebalancing_utilization_threshold:.2f}"
+            )
+            return False
+
+        return True
 
     def _compute_update_layer_ids_chunks(self) -> List[List[int]]:
         all_layer_ids = sorted(

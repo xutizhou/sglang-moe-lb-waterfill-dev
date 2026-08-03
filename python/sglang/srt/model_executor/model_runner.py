@@ -121,11 +121,11 @@ from sglang.srt.layers.dp_attention import (
     set_is_extend_in_batch,
 )
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
+from sglang.srt.layers.moe.topk import TopK
 from sglang.srt.layers.pooler import EmbeddingPoolerOutput
 from sglang.srt.layers.quantization.fp8_kernel import fp8_dtype
 from sglang.srt.layers.sampler import create_sampler
 from sglang.srt.layers.torchao_utils import apply_torchao_config_to_model
-from sglang.srt.layers.moe.topk import TopK
 from sglang.srt.lora.lora_manager import LoRAManager
 from sglang.srt.lora.lora_registry import LoRARef
 from sglang.srt.managers.schedule_batch import sanity_check_mm_pad_shift_value
@@ -613,12 +613,15 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         if self.server_args.remote_instance_weight_loader_use_transfer_engine():
             self.remote_instance_init_transfer_engine()
 
+        self.moe_load_balancer = self._create_moe_load_balancer()
+
         if not self.is_draft_worker:
             set_global_expert_location_metadata(
                 compute_initial_expert_location_metadata(
                     server_args=server_args,
                     model_config=self.model_config,
                     moe_ep_rank=self.moe_ep_rank,
+                    moe_load_balancer=self.moe_load_balancer,
                 )
             )
             if self.tp_rank == 0 and envs.SGLANG_LOG_EXPERT_LOCATION_METADATA.get():
@@ -641,16 +644,6 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             else None
         )
         self.expert_location_updater = ExpertLocationUpdater()
-
-        # LPLB (moe_load_balancer-backed): per-layer runtimes consume
-        # post-AR global logical counts and drive the LP solve via the SDK.
-        # Constructed once after the initial ExpertLocationMetadata is
-        # available; re-init runs after every EPLB rebalance.
-        if (
-            self.server_args.ep_dispatch_algorithm == "lp"
-            and not self.is_draft_worker
-        ):
-            self._init_lplb_runtimes()
 
         (
             ElasticEPStateManager.init(self.server_args)
@@ -1592,102 +1585,79 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                     f"TP rank {self.tp_rank} could finish the model loading, but there are other ranks that didn't finish loading. It is likely due to unexpected failures (e.g., OOM) or a slow node."
                 ) from None
 
+    def _create_moe_load_balancer(self):
+        server_args = self.server_args
+        needs_mlb = (
+            server_args.enable_eplb
+            or server_args.ep_dispatch_algorithm == "lp"
+            or server_args.enable_deepep_waterfill
+            or server_args.init_expert_location != "trivial"
+        )
+        if not needs_mlb:
+            return None
+
+        from moe_load_balancer import MoELoadBalancer
+
+        routing_policies = {}
+        if server_args.ep_dispatch_algorithm == "lp":
+            from moe_load_balancer.adapters.sglang import SGLangLPLBKernels
+            from moe_load_balancer.policies.l2.lplb import LPLBL2Router
+
+            common = ExpertLocationMetadata._init_common(
+                server_args,
+                self.model_config,
+            )
+            if common is None:
+                raise ValueError("LPLB requires MoE expert-location metadata.")
+            routing_policies["lplb"] = LPLBL2Router(
+                kernels=SGLangLPLBKernels(),
+                num_gpus=common["ep_size"],
+            )
+
+        if server_args.enable_deepep_waterfill:
+            from moe_load_balancer.policies.l2.waterfill import WaterfillL2Router
+
+            routing_policies["waterfill"] = WaterfillL2Router(
+                source_rank=self.moe_ep_rank,
+                world_size=self.moe_ep_size,
+            )
+
+        return MoELoadBalancer(routing_policies=routing_policies)
+
     def _prepare_moe_topk(self):
-        balancer_cls = None
+        enable_l2 = (
+            self.server_args.ep_dispatch_algorithm == "lp"
+            or self.server_args.enable_deepep_waterfill
+        )
+        if not enable_l2:
+            return
+        if self.moe_load_balancer is None:
+            raise RuntimeError("MLB L2 is enabled but MoELoadBalancer was not created.")
+
+        placement_metadata = get_global_expert_location_metadata()
+        if placement_metadata is None:
+            raise RuntimeError("MLB L2 requires committed expert metadata.")
+        if self.server_args.ep_dispatch_algorithm == "lp":
+            from moe_load_balancer.adapters.sglang import to_placement_snapshot
+
         num_prepared = 0
-        num_routed_experts = None
         for module in self.model.modules():
             if not isinstance(module, TopK):
                 continue
-            if (
-                not module.enable_deepep_waterfill
-                or module.deepep_waterfill_balancer is not None
-            ):
-                continue
-            if num_routed_experts is None:
-                num_routed_experts = getattr(
-                    self.model_config.hf_config, "n_routed_experts", None
+            module.moe_load_balancer = self.moe_load_balancer
+            if self.server_args.ep_dispatch_algorithm == "lp":
+                if module.layer_id is None:
+                    raise RuntimeError("LPLB requires every MoE TopK to have layer_id.")
+                self.moe_load_balancer.prepare_routing_layer(
+                    "lplb",
+                    to_placement_snapshot(placement_metadata, module.layer_id),
                 )
-                if num_routed_experts is None:
-                    raise ValueError(
-                        "DeepEP waterfill requires model config n_routed_experts."
-                    )
-            if balancer_cls is None:
-                from moe_load_balancer.adapters.sglang.waterfill import (
-                    WaterfillRuntime,
-                )
-
-                balancer_cls = WaterfillRuntime
-            module.deepep_waterfill_balancer = balancer_cls(
-                layer_id=module.layer_id,
-                source_rank=self.moe_ep_rank,
-                world_size=self.moe_ep_size,
-                num_routed_experts=num_routed_experts,
-                routed_scaling_factor=(
-                    module.topk_config.routed_scaling_factor
-                    if module.topk_config.routed_scaling_factor is not None
-                    else 1.0
-                ),
-            )
             num_prepared += 1
         if num_prepared:
             log_info_on_rank0(
-                logger, f"Prepared {num_prepared} DeepEP waterfill TopK modules."
+                logger,
+                f"Attached one MoELoadBalancer to {num_prepared} TopK modules.",
             )
-    def _init_lplb_runtimes(self):
-        """Build one LPLBRuntime per MoE layer and register it globally.
-
-        The runtime wraps the moe_load_balancer SDK's framework-neutral
-        LPLBL2Router and the SGLang-backed LPLBKernels delegating to
-        ``sglang.jit_kernel.lplb.cuda_solver``. Each runtime owns a
-        SGLangPlacementAdapter that aliases the live
-        ``ExpertLocationMetadata`` tensors; the adapter's
-        ``placement_version`` is bumped by ``update_expert_location`` so
-        the router rebuilds its per-layer LP matrices after EPLB
-        rebalances without us having to reconstruct the runtime.
-        """
-        from sglang.srt.distributed import get_moe_ep_group
-
-        from moe_load_balancer.adapters.sglang import SGLangPlacementAdapter
-        from moe_load_balancer.adapters.sglang.lplb import LPLBRuntime
-        from sglang.srt.eplb.moelb_lplb_registry import (
-            clear_global_lplb_runtimes,
-            set_global_lplb_runtime,
-        )
-
-        metadata = get_global_expert_location_metadata()
-        if metadata is None:
-            return
-
-        # The placement adapter is shared across layers — one snapshot per
-        # call returns the layer the runtime requested. Re-using one
-        # adapter keeps ``placement_version`` consistent.
-        self._lplb_placement_adapter = SGLangPlacementAdapter(metadata)
-
-        clear_global_lplb_runtimes()
-        ep_group = get_moe_ep_group()
-
-        architectures = getattr(self.model_config.hf_config, "architectures", None)
-        model_arch = architectures[0] if architectures else None
-
-        for lid in range(metadata.num_layers):
-            runtime = LPLBRuntime(
-                layer_id=lid,
-                ep_group=ep_group,
-                num_logical_experts=metadata.num_logical_experts,
-                num_physical_experts=metadata.num_physical_experts,
-                num_gpus=metadata.ep_size,
-                placement_provider=self._lplb_placement_adapter,
-                model_architecture=model_arch,
-            )
-            set_global_lplb_runtime(lid, runtime)
-
-        logger.info(
-            f"Initialized {metadata.num_layers} LPLB runtimes "
-            f"(num_logical={metadata.num_logical_experts}, "
-            f"num_physical={metadata.num_physical_experts}, "
-            f"ep_size={metadata.ep_size})."
-        )
 
     def update_expert_location(
         self,
@@ -1731,16 +1701,6 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                     weight_name_filter=weight_name_filter,
                 )
 
-        # LPLB: notify the placement adapter that EPLB just rebalanced. The
-        # adapter bumps its ``placement_version`` counter so each runtime's
-        # router rebuilds the per-layer LP matrices on the next route call.
-        # We do not reconstruct the LPLBRuntime objects themselves — the
-        # adapter aliases live metadata tensors, so the rebuild is implicit.
-        if (
-            self.server_args.ep_dispatch_algorithm == "lp"
-            and getattr(self, "_lplb_placement_adapter", None) is not None
-        ):
-            self._lplb_placement_adapter.bump_version()
     def maybe_recover_ep_ranks(self):
         # TODO(perf): `active_ranks.all()` on a CUDA tensor triggers host-device
         # synchronization, and this function is on the forward-path.

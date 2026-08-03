@@ -119,13 +119,6 @@ class ExpertDistributionRecorder(ABC):
     def recording(self):
         return False
 
-    def get_average_utilization_rate(self):
-        """Return the windowed average GPU expert-utilization rate, or
-        None if not available (no data yet, or threshold is 1.0 / metric
-        disabled). Public accessor used by EPLBManager.rebalance to feed
-        the MLB skip-gate; the noop recorder returns None."""
-        return None
-
     def _on_not_implemented(self):
         raise Exception(
             "Please set ServerArgs.expert_distribution_recorder_mode to use ExpertDistributionRecorder."
@@ -284,24 +277,6 @@ class _ExpertDistributionRecorderReal(ExpertDistributionRecorder):
     def recording(self):
         return self._recording
 
-    def get_average_utilization_rate(self):
-        """Return the windowed utilization rate, or None if the
-        accumulator does not track it.
-
-        We do NOT swallow exceptions from
-        ``_get_global_average_utilization_rate``: that method runs a
-        ``torch.distributed.broadcast`` across EP ranks under NCCL.
-        If a single rank aborted that collective with an exception
-        while peers were still waiting, swallowing it locally would
-        leave the peers hanging until watchdog timeout. Symmetric
-        propagation (raise on all ranks, or none) is the only safe
-        choice.
-        """
-        acc = self._accumulator
-        if acc is None or not hasattr(acc, "_get_global_average_utilization_rate"):
-            return None
-        return acc._get_global_average_utilization_rate()
-
 
 _global_expert_distribution_recorder: Optional[ExpertDistributionRecorder] = (
     _ExpertDistributionRecorderNoop()
@@ -345,6 +320,10 @@ class _SinglePassGatherer(ABC):
                 return _SelectExpertsSinglePassGatherer(expert_location_metadata, rank)
             elif server_args.deepep_mode == "low_latency":
                 return _DeepepLowLatencySinglePassGatherer(
+                    expert_location_metadata, rank
+                )
+            elif server_args.deepep_mode == "auto":
+                return _DeepepAutoSinglePassGatherer(
                     expert_location_metadata, rank
                 )
             else:
@@ -566,7 +545,14 @@ class _DeepepNormalSinglePassGatherer(_LayerBasedCpuSinglePassGatherer):
         num_tokens_per_expert,
     ):
         assert isinstance(local_physical_count_of_layer, list)
-        self._on_layer_data(layer_idx, local_physical_count_of_layer)
+        # DeepEP appends fixed fused-shared slots after the routed physical
+        # experts.  EPLB placement statistics cover routed experts only.
+        self._on_layer_data(
+            layer_idx,
+            local_physical_count_of_layer[
+                : self._expert_location_metadata.num_local_physical_experts
+            ],
+        )
 
     def collect(self) -> Dict:
         local_physical_count = super()._collect_objects(
@@ -589,7 +575,55 @@ class _DeepepLowLatencySinglePassGatherer(_LayerBasedGpuSinglePassGatherer):
         self, layer_idx: int, local_physical_count_of_layer: torch.Tensor
     ):
         # Most naive implementation, can optimize later
-        self._data[layer_idx, :] += local_physical_count_of_layer
+        self._data[layer_idx, :] += local_physical_count_of_layer[
+            : self._expert_location_metadata.num_local_physical_experts
+        ]
+
+
+class _DeepepAutoSinglePassGatherer(_LayerBasedGpuSinglePassGatherer):
+    """Gather exact physical counts for DeepEP's per-forward dispatch mode.
+
+    DeepEP auto mode resolves to normal whenever the DP batch contains extend
+    tokens, and to low-latency otherwise. Mirror that decision here so normal
+    forwards use physical IDs from select-experts while low-latency forwards use
+    the local physical counts returned by dispatch. Counting both hooks would
+    double count low-latency forwards because select-experts is also invoked on
+    that path.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs, enable_global_physical_experts=True)
+        self._is_extend_in_batch = False
+
+    def on_forward_pass_start(self, forward_batch: ForwardBatch):
+        self._is_extend_in_batch = forward_batch.is_extend_in_batch
+
+    def on_select_experts(self, layer_idx: int, topk_ids: torch.Tensor):
+        if not self._is_extend_in_batch:
+            return
+
+        topk_ids = topk_ids.flatten()
+        mask = topk_ids != -1
+        self._data[layer_idx, :].scatter_add_(
+            dim=0, index=topk_ids.masked_fill(~mask, 0).long(), src=mask.int()
+        )
+
+    def on_deepep_dispatch_low_latency(
+        self, layer_idx: int, local_physical_count_of_layer: torch.Tensor
+    ):
+        if self._is_extend_in_batch:
+            return
+
+        num_local_physical_experts = (
+            self._expert_location_metadata.num_local_physical_experts
+        )
+        start = self._rank * num_local_physical_experts
+        end = start + num_local_physical_experts
+        # Waterfill's fused shared expert is the final local DeepEP slot.  It
+        # is not part of EPLB's routed-expert placement statistics.
+        self._data[layer_idx, start:end] += local_physical_count_of_layer[
+            :num_local_physical_experts
+        ]
 
 
 def _convert_per_token_to_global_physical_count(
@@ -863,32 +897,16 @@ class _DetailAccumulator(_UtilizationRateAccumulatorMixin):
 class _StatAccumulator(_UtilizationRateAccumulatorMixin):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-        # MLB integration (Option B "replace buffer"): instead of holding a
-        # local _Buffer of global_physical_count, route per-forward
-        # observations into MLB's framework-neutral EPLBRecorder via
-        # SGLangStatsBridge. The buffer + physical->logical conversion now
-        # live in MLB; the utilization-rate metric path
-        # (_UtilizationRateAccumulatorMixin) stays in sglang.
-        # Use ensure_default_runtime so cold-start order with
-        # init_by_eplb is non-fragile: whichever of {_StatAccumulator,
-        # init_by_eplb} runs first installs the configured runtime;
-        # the second just reuses it. This avoids the silent state loss
-        # where a second set_default_runtime() would orphan plans
-        # already published to the first instance.
-        from moe_load_balancer.adapters.sglang.eplb import (
-            ensure_default_runtime,
-        )
-        from moe_load_balancer.core.types import RebalancePolicyConfig
-
-        runtime = ensure_default_runtime(
-            rebalance_policy=RebalancePolicyConfig(
-                recording_window_size=self._server_args.expert_distribution_recorder_buffer_size,
-                min_utilization_threshold=self._server_args.eplb_min_rebalancing_utilization_threshold,
+        self._global_physical_count_of_buffered_step = _Buffer.init_new(
+            item_shape=(
+                self._expert_location_metadata.num_layers,
+                # Cannot use local_physical_count to support select_experts
+                self._expert_location_metadata.num_physical_experts,
             ),
+            buffer_size=self._server_args.expert_distribution_recorder_buffer_size,
+            dtype=torch.int32,
+            device=self._server_args.device,
         )
-        self._mlb_bridge = runtime.get_stats_bridge(rank=self._rank)
-
         self._first_dump = True
 
     def append(
@@ -899,34 +917,36 @@ class _StatAccumulator(_UtilizationRateAccumulatorMixin):
         outputs: Dict[str, Any],
     ):
         super().append(forward_pass_id, gatherer_key, single_pass_data, outputs)
-        # MLB owns the buffer + logical conversion. Hand it the per-forward
-        # global_physical_count plus the current placement map (used by
-        # MLB at collect() time to do the physical -> logical conversion).
-        self._mlb_bridge.append_per_forward(
-            global_physical_count=single_pass_data["global_physical_count"],
-            physical_to_logical_map=self._expert_location_metadata.physical_to_logical_map,
+        # Can optimize if overhead here is large
+        self._global_physical_count_of_buffered_step.append(
+            single_pass_data["global_physical_count"]
         )
 
     def reset(self):
         super().reset()
-        self._mlb_bridge.reset()
+        self._global_physical_count_of_buffered_step.reset()
 
     def dump(self, output_mode: _OutputMode):
-        # MLB drains the recorder and gives back the sglang-shaped dict
-        # (logical_count already converted, average_utilization passed
-        # through from sglang's mixin).
-        output = self._mlb_bridge.dump_for_sglang(
-            average_utilization_rate_over_window=self._get_global_average_utilization_rate(),
+        logical_count_of_buffered_step = _convert_global_physical_count_to_logical_count(
+            self._global_physical_count_of_buffered_step.get_all(),
+            num_layers=self._expert_location_metadata.num_layers,
+            num_logical_experts=self._expert_location_metadata.num_logical_experts,
+            physical_to_logical_map=self._expert_location_metadata.physical_to_logical_map,
         )
 
         if self._first_dump:
             self._first_dump = False
             torch.get_device_module().empty_cache()
 
-        if output["logical_count"] is not None:
-            torch.distributed.all_reduce(
-                output["logical_count"], op=torch.distributed.ReduceOp.SUM
-            )
+        torch.distributed.all_reduce(
+            logical_count_of_buffered_step, op=torch.distributed.ReduceOp.SUM
+        )
+
+        output = dict(
+            rank=self._rank,
+            logical_count=logical_count_of_buffered_step,
+            average_utilization_rate_over_window=self._get_global_average_utilization_rate(),
+        )
 
         if output_mode == "file":
             if self._rank == 0:
