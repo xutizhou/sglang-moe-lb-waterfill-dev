@@ -121,11 +121,11 @@ from sglang.srt.layers.dp_attention import (
     set_is_extend_in_batch,
 )
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
+from sglang.srt.layers.moe.topk import TopK
 from sglang.srt.layers.pooler import EmbeddingPoolerOutput
 from sglang.srt.layers.quantization.fp8_kernel import fp8_dtype
 from sglang.srt.layers.sampler import create_sampler
 from sglang.srt.layers.torchao_utils import apply_torchao_config_to_model
-from sglang.srt.layers.moe.topk import TopK
 from sglang.srt.lora.lora_manager import LoRAManager
 from sglang.srt.lora.lora_registry import LoRARef
 from sglang.srt.managers.schedule_batch import sanity_check_mm_pad_shift_value
@@ -1600,7 +1600,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
 
         routing_policies = {}
         if server_args.ep_dispatch_algorithm == "lp":
-            from moe_load_balancer.adapters.sglang import SGLangFusedIPMBackend
+            from moe_load_balancer.adapters.sglang import SGLangLPLBKernels
             from moe_load_balancer.policies.l2.lplb import LPLBL2Router
 
             common = ExpertLocationMetadata._init_common(
@@ -1610,9 +1610,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             if common is None:
                 raise ValueError("LPLB requires MoE expert-location metadata.")
             routing_policies["lplb"] = LPLBL2Router(
-                ep_size=common["ep_size"],
-                num_physical_experts=common["num_physical_experts"],
-                ipm_backend=SGLangFusedIPMBackend(),
+                kernels=SGLangLPLBKernels(),
+                num_gpus=common["ep_size"],
             )
 
         if server_args.enable_deepep_waterfill:
