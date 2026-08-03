@@ -1600,7 +1600,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
 
         routing_policies = {}
         if server_args.ep_dispatch_algorithm == "lp":
-            from moe_load_balancer.adapters.sglang import SGLangLPLBKernels
+            from moe_load_balancer.kernels.lplb import CUDALPLBKernels
             from moe_load_balancer.policies.l2.lplb import LPLBL2Router
 
             common = ExpertLocationMetadata._init_common(
@@ -1610,7 +1610,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             if common is None:
                 raise ValueError("LPLB requires MoE expert-location metadata.")
             routing_policies["lplb"] = LPLBL2Router(
-                kernels=SGLangLPLBKernels(),
+                kernels=CUDALPLBKernels(),
                 num_gpus=common["ep_size"],
             )
 

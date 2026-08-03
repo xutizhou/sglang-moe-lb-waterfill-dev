@@ -12,12 +12,9 @@ from types import SimpleNamespace
 
 import torch
 import torch.distributed as dist
-
 from moe_load_balancer import MoELoadBalancer
-from moe_load_balancer.adapters.sglang import (
-    SGLangLPLBKernels,
-    to_placement_request,
-)
+from moe_load_balancer.adapters.sglang import to_placement_request
+from moe_load_balancer.kernels.lplb import CUDALPLBKernels
 from moe_load_balancer.policies.l2.lplb import LPLBL2Router
 from moe_load_balancer.policies.l2.waterfill import WaterfillL2Router
 from sglang.srt.eplb import moe_load_balancer_glue as glue
@@ -153,7 +150,7 @@ def main():
     mlb = MoELoadBalancer(
         routing_policies={
             "lplb": LPLBL2Router(
-                kernels=SGLangLPLBKernels(),
+                kernels=CUDALPLBKernels(),
                 num_gpus=2,
             ),
             "waterfill": WaterfillL2Router(source_rank=rank, world_size=2),
