@@ -628,6 +628,8 @@ class DeepseekV2MoE(nn.Module):
             or get_moe_a2a_backend().is_ascend_fuseep()
             or get_moe_a2a_backend().is_flashinfer()
         )
+        # ModelRunner attaches its existing MLB orchestrator when L3 is enabled.
+        self.moe_load_balancer = None
         self._fuse_shared_experts_inside_sbo = SboFlags.fuse_shared_experts_inside_sbo()
 
     def get_moe_weights(self):
@@ -954,8 +956,12 @@ class DeepseekV2MoE(nn.Module):
                 hidden_states,
                 router_logits,
                 num_token_non_padded=forward_batch.num_token_non_padded,
-                expert_location_dispatch_info=ExpertLocationDispatchInfo.init_new(
-                    layer_id=self.layer_id,
+                expert_location_dispatch_info=(
+                    ExpertLocationDispatchInfo.init_new(
+                        layer_id=self.layer_id,
+                    )
+                    if self.moe_load_balancer is None
+                    else None
                 ),
                 forward_batch=forward_batch,
                 **topk_kwargs,
@@ -976,6 +982,23 @@ class DeepseekV2MoE(nn.Module):
                         (0, topk_output.topk_weights.shape[-1] + n)
                     ),
                 )
+
+        # All EP ranks, including ranks with no local tokens, must participate
+        # in UltraEP placement and weight synchronization in identical order.
+        if self.moe_load_balancer is not None:
+            from moe_load_balancer import L3Request
+
+            decision = self.moe_load_balancer.rebalance_runtime(
+                L3Request(
+                    layer_id=self.layer_id,
+                    logical_topk_ids=topk_output.topk_ids,
+                    topk_weights=topk_output.topk_weights,
+                )
+            )
+            topk_output = topk_output._replace(
+                topk_ids=decision.routed_physical_topk_ids,
+                topk_weights=decision.topk_weights,
+            )
 
         if sbo_overlap_dispatch_flag:
             shared_output = None

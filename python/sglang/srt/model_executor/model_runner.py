@@ -735,6 +735,10 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 # lora_manager.init_cuda_graph_batch_info().
                 self._init_lora_cuda_graph_moe_buffers()
 
+        # L1/L2 need the orchestrator before model loading, while L3 must see
+        # the final framework-owned expert tensors after all weight transforms.
+        self._prepare_moe_l3()
+
         # Enable batch invariant mode
         if server_args.enable_deterministic_inference:
             from sglang.srt.batch_invariant_ops import enable_batch_invariant_mode
@@ -1591,6 +1595,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             server_args.enable_eplb
             or server_args.ep_dispatch_algorithm == "lp"
             or server_args.enable_deepep_waterfill
+            or server_args.enable_ultraep
             or server_args.init_expert_location != "trivial"
         )
         if not needs_mlb:
@@ -1623,6 +1628,26 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             )
 
         return MoELoadBalancer(routing_policies=routing_policies)
+
+    def _prepare_moe_l3(self):
+        if not self.server_args.enable_ultraep:
+            return
+        if self.moe_load_balancer is None:
+            raise RuntimeError("UltraEP requires the ModelRunner MoELoadBalancer.")
+
+        from sglang.srt.eplb.moe_load_balancer_glue import register_ultraep_l3
+
+        num_layers = register_ultraep_l3(
+            model=self.model,
+            model_config=self.model_config,
+            server_args=self.server_args,
+            moe_load_balancer=self.moe_load_balancer,
+        )
+        log_info_on_rank0(
+            logger,
+            f"Registered UltraEP L3 on the existing MoELoadBalancer for "
+            f"{num_layers} MoE layers.",
+        )
 
     def _prepare_moe_topk(self):
         enable_l2 = (

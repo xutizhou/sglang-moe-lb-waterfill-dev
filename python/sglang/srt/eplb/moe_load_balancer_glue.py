@@ -37,6 +37,105 @@ _FORWARD_MODE_TO_STAGE = {
 }
 
 
+def register_ultraep_l3(*, model, model_config, server_args, moe_load_balancer) -> int:
+    """Register final SGLang expert tensors with MLB's L3 policy."""
+
+    try:
+        from moe_load_balancer import ExpertLayerStorage, ExpertProjectionStorage
+        from moe_load_balancer.policies.l3 import UltraEPL3Policy
+    except ImportError as exc:
+        raise ImportError(
+            "--enable-ultraep requires moe-load-balancer installed with its "
+            "UltraEP backend extension (MLB_BUILD_ULTRAEP=1)."
+        ) from exc
+
+    num_logical_experts = getattr(model_config.hf_config, "n_routed_experts", None)
+    if num_logical_experts is None:
+        raise ValueError("UltraEP currently supports DeepSeek-style n_routed_experts.")
+
+    layer_storage = []
+    moe_modules = []
+    for module in model.modules():
+        if not (
+            hasattr(module, "forward_deepep")
+            and hasattr(module, "experts")
+            and hasattr(module, "layer_id")
+        ):
+            continue
+        if getattr(module, "num_fused_shared_experts", 0) != 0:
+            raise ValueError("UltraEP requires shared-expert fusion to be disabled.")
+
+        experts = module.experts
+        if experts.quant_method is None:
+            raise ValueError("UltraEP requires a configured MoE quantization method.")
+        try:
+            tensor_view = experts.quant_method.get_expert_replication_tensor_view(
+                experts
+            )
+        except NotImplementedError as exc:
+            raise ValueError(
+                "UltraEP does not support expert replication for quantization "
+                f"method {type(experts.quant_method).__name__}."
+            ) from exc
+
+        if tensor_view.auxiliary_tensors:
+            unsupported = [name for name, _ in tensor_view.auxiliary_tensors]
+            raise ValueError(
+                "UltraEP does not yet synchronize these per-expert quantization "
+                f"tensors: {unsupported}."
+            )
+        for projection, weight, scale in (
+            ("fc1", tensor_view.w13_weight, tensor_view.w13_weight_scale),
+            ("fc2", tensor_view.w2_weight, tensor_view.w2_weight_scale),
+        ):
+            if weight.element_size() == 1 and scale is None:
+                raise ValueError(
+                    f"Low-precision UltraEP {projection} weights require "
+                    "per-expert scales."
+                )
+
+        layer_storage.append(
+            ExpertLayerStorage(
+                layer_id=module.layer_id,
+                fc1=ExpertProjectionStorage(
+                    weight=tensor_view.w13_weight.detach(),
+                    weight_scale=(
+                        tensor_view.w13_weight_scale.detach()
+                        if tensor_view.w13_weight_scale is not None
+                        else None
+                    ),
+                ),
+                fc2=ExpertProjectionStorage(
+                    weight=tensor_view.w2_weight.detach(),
+                    weight_scale=(
+                        tensor_view.w2_weight_scale.detach()
+                        if tensor_view.w2_weight_scale is not None
+                        else None
+                    ),
+                ),
+            )
+        )
+        moe_modules.append(module)
+
+    if not layer_storage:
+        raise ValueError("UltraEP did not find any compatible DeepEP MoE layers.")
+
+    ep_group = get_moe_ep_group()
+    policy = UltraEPL3Policy(
+        group=ep_group.device_group,
+        layers=layer_storage,
+        num_logical_experts=num_logical_experts,
+        ep_size=ep_group.world_size,
+        num_redundant_experts_per_rank=(
+            server_args.ultraep_num_redundant_experts_per_rank
+        ),
+    )
+    moe_load_balancer.register_l3_policy(policy)
+    for module in moe_modules:
+        module.moe_load_balancer = moe_load_balancer
+    return len(moe_modules)
+
+
 def route_topk_with_mlb(
     *,
     moe_load_balancer,

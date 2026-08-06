@@ -603,6 +603,8 @@ class ServerArgs:
     enable_aiter_allreduce_fusion: bool = False
     deepep_mode: Literal["auto", "normal", "low_latency"] = "auto"
     ep_num_redundant_experts: int = 0
+    enable_ultraep: bool = False
+    ultraep_num_redundant_experts_per_rank: int = 0
     ep_dispatch_algorithm: Optional[Literal["static", "dynamic", "fake", "lp"]] = None
     init_expert_location: str = "trivial"
     enable_eplb: bool = False
@@ -3187,6 +3189,61 @@ class ServerArgs:
                 ) <= envs.SGLANG_MORI_NUM_MAX_DISPATCH_TOKENS_PER_RANK.get(), "SGLANG_MORI_NUM_MAX_DISPATCH_TOKENS_PER_RANK (default 4096) must be larger or equal to chunked_prefill_size"
 
     def _handle_eplb_and_dispatch(self):
+        if self.enable_ultraep:
+            if self.ep_size <= 1:
+                raise ValueError("--enable-ultraep requires EP size greater than one.")
+            if self.moe_a2a_backend != "deepep":
+                raise ValueError(
+                    "--enable-ultraep currently requires --moe-a2a-backend deepep."
+                )
+            if self.ultraep_num_redundant_experts_per_rank <= 0:
+                raise ValueError(
+                    "--enable-ultraep requires "
+                    "--ultraep-num-redundant-experts-per-rank > 0."
+                )
+            if self.enable_eplb or self.ep_dispatch_algorithm is not None:
+                raise ValueError(
+                    "UltraEP L3 cannot currently be combined with committed EPLB "
+                    "placement or an L2 EP dispatch algorithm."
+                )
+            if self.init_expert_location != "trivial":
+                raise ValueError(
+                    "UltraEP currently requires --init-expert-location trivial."
+                )
+            if self.enable_deepep_waterfill:
+                raise ValueError(
+                    "UltraEP currently requires DeepEP Waterfill to be disabled."
+                )
+            if self.expert_distribution_recorder_mode is not None:
+                raise ValueError(
+                    "UltraEP currently does not support SGLang expert recording."
+                )
+            if self.dwdp_size > 1:
+                raise ValueError("UltraEP currently cannot be combined with DWDP.")
+            if self.pp_size > 1 or self.enable_two_batch_overlap:
+                raise ValueError(
+                    "UltraEP currently requires PP size 1 and two-batch overlap disabled."
+                )
+            if self.elastic_ep_backend is not None:
+                raise ValueError("UltraEP currently does not support elastic EP.")
+
+            expected_redundant = (
+                self.ultraep_num_redundant_experts_per_rank * self.ep_size
+            )
+            if self.ep_num_redundant_experts not in (0, expected_redundant):
+                raise ValueError(
+                    "--ep-num-redundant-experts must be omitted or equal "
+                    f"{expected_redundant} for the requested UltraEP layout."
+                )
+            self.ep_num_redundant_experts = expected_redundant
+            self.disable_shared_experts_fusion = True
+            self.enforce_shared_experts_fusion = False
+            self.disable_cuda_graph = True
+            logger.warning(
+                "UltraEP L3 is enabled: committed EPLB/LPLB, expert recording, "
+                "DeepEP Waterfill, shared-expert fusion, and CUDA graph are disabled."
+            )
+
         if self.enable_eplb and (self.expert_distribution_recorder_mode is None):
             self.expert_distribution_recorder_mode = "stat"
             logger.warning(
@@ -5797,6 +5854,18 @@ class ServerArgs:
             type=int,
             default=ServerArgs.ep_num_redundant_experts,
             help="Allocate this number of redundant experts in expert parallel.",
+        )
+        parser.add_argument(
+            "--enable-ultraep",
+            action="store_true",
+            default=ServerArgs.enable_ultraep,
+            help="Enable UltraEP as MLB's experimental L3 policy for DeepEP inference.",
+        )
+        parser.add_argument(
+            "--ultraep-num-redundant-experts-per-rank",
+            type=int,
+            default=ServerArgs.ultraep_num_redundant_experts_per_rank,
+            help="Reserve this many transient UltraEP replica slots on each EP rank.",
         )
         parser.add_argument(
             "--ep-dispatch-algorithm",

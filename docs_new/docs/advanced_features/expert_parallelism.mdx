@@ -240,6 +240,40 @@ To enable EPLB, use the flags `--enable-eplb`. For optimal performance, increase
 
 For more details, refer to the [EPLB Section in the Large-Scale EP Blog](https://lmsys.org/blog/2025-05-05-large-scale-ep/#expert-parallelism-load-balancer) and the [EPLB Repository](https://github.com/deepseek-ai/eplb).
 
+### Experimental MLB L3 Policy: UltraEP
+
+UltraEP is integrated as an L3 runtime-rebalancing policy of SGLang's existing
+`MoELoadBalancer`. The same orchestrator owns the existing L1 placement and L2
+routing policies; after model loading, SGLang registers the final expert tensor
+pointers with L3 instead of creating a second load balancer. Unlike periodic
+EPLB, UltraEP uses post-gating load to materialize transient replicas and
+reroute the current layer.
+
+The initial inference integration targets DeepSeek-family models on SM90/SM100
+with DeepEP and NVSHMEM. Install the CUDA-matched NVSHMEM package, then build
+MLB inside the SGLang environment with `MLB_BUILD_ULTRAEP=1` and
+`--no-build-isolation`. For example, launch EP8 with two replica slots per rank:
+
+```bash
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3 \
+  --tp 8 --ep 8 \
+  --moe-a2a-backend deepep \
+  --enable-ultraep \
+  --ultraep-num-redundant-experts-per-rank 2
+```
+
+The initial implementation rejects concurrent EPLB/LPLB, non-trivial initial
+placement, DeepEP Waterfill, expert recording, PP, TBO, DWDP, elastic EP, and
+per-expert quantization tensors that UltraEP cannot synchronize. CUDA graph is
+disabled until mutable replica-weight capture is validated. UltraEP currently
+synchronizes into its NVSHMEM buffer and then copies the replica rows into
+SGLang's existing redundant-expert slots before dispatch.
+
+Quantized experts expose a non-owning replication tensor view through their
+quantization method. This view covers the complete physical weight tensors and
+paired scales; it does not allocate a second copy of the model weights.
+
 
 ## EP with Spectulative Decoding
 
