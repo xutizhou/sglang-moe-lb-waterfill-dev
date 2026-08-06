@@ -240,6 +240,53 @@ To enable EPLB, use the flags `--enable-eplb`. For optimal performance, increase
 
 For more details, refer to the [EPLB Section in the Large-Scale EP Blog](https://lmsys.org/blog/2025-05-05-large-scale-ep/#expert-parallelism-load-balancer) and the [EPLB Repository](https://github.com/deepseek-ai/eplb).
 
+### Experimental MLB L3 Policy: UltraEP
+
+UltraEP is integrated as an L3 runtime-rebalancing policy of SGLang's existing
+`MoELoadBalancer`. The same orchestrator owns the existing L1 placement and L2
+routing interfaces; SGLang only registers the L3 policy on that orchestrator
+instead of creating an algorithm-specific runtime or a second load balancer.
+Unlike periodic EPLB, UltraEP uses post-gating load to choose transient replicas
+and reroute the current layer.
+
+The initial inference integration targets DeepSeek-family models on SM90/SM100
+with DeepEP and NVSHMEM. Install the CUDA-matched NVSHMEM package, then build
+MLB inside the SGLang environment with `MLB_BUILD_ULTRAEP=1` and
+`--no-build-isolation`. For example, launch EP8 with two replica slots per rank:
+
+```bash
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3 \
+  --tp 8 --ep 8 \
+  --moe-a2a-backend deepep \
+  --enable-ultraep \
+  --ultraep-num-redundant-experts-per-rank 2
+```
+
+The initial implementation rejects concurrent EPLB/LPLB, non-trivial initial
+placement, DeepEP Waterfill, expert recording, PP, TBO, MoE data parallelism,
+and elastic EP.
+CUDA graph is disabled until mutable replica-weight capture is validated.
+
+MLB returns one placement and reroutes logical TopK IDs against that same
+placement. One UltraEP manager is shared by MLB's L3 policy and SGLang's
+communication adapter. MLB's CUDA placement tensors pass directly to UltraEP;
+there is no host copy or Python P2P plan. UltraEP receives quantized weights and
+block scales into NVSHMEM symmetric buffers, then SGLang materializes them
+bitwise into its existing redundant-expert rows. The communication and local
+copy streams overlap expert dispatch; the compute stream waits only immediately
+before the expert GEMMs. Serving decode reuses the placement learned by the most
+recent prefill, so static inference weights are not moved again for every output
+token. There are no public transfer-plan or reroute-plan objects, and no second
+load balancer or algorithm-specific SGLang runtime.
+
+Quantized experts expose a non-owning replication tensor view through their
+quantization method. This view covers all per-expert state required by that
+method; it does not allocate a second copy of the model weights. The current
+UltraEP adapter supports the expert weights and optional W13/W2 block scales;
+quantization methods with additional auxiliary expert tensors are rejected at
+startup rather than copied incompletely.
+
 
 ## EP with Spectulative Decoding
 

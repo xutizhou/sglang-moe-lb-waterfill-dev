@@ -628,6 +628,10 @@ class DeepseekV2MoE(nn.Module):
             or get_moe_a2a_backend().is_ascend_fuseep()
             or get_moe_a2a_backend().is_flashinfer()
         )
+        # ModelRunner attaches its existing MLB orchestrator when L3 is enabled.
+        self.moe_load_balancer = None
+        # SGLang owns expert tensors and the shared UltraEP transfer lifecycle.
+        self.expert_transfer = None
         self._fuse_shared_experts_inside_sbo = SboFlags.fuse_shared_experts_inside_sbo()
 
     def get_moe_weights(self):
@@ -954,8 +958,12 @@ class DeepseekV2MoE(nn.Module):
                 hidden_states,
                 router_logits,
                 num_token_non_padded=forward_batch.num_token_non_padded,
-                expert_location_dispatch_info=ExpertLocationDispatchInfo.init_new(
-                    layer_id=self.layer_id,
+                expert_location_dispatch_info=(
+                    ExpertLocationDispatchInfo.init_new(
+                        layer_id=self.layer_id,
+                    )
+                    if self.moe_load_balancer is None
+                    else None
                 ),
                 forward_batch=forward_batch,
                 **topk_kwargs,
@@ -976,6 +984,33 @@ class DeepseekV2MoE(nn.Module):
                         (0, topk_output.topk_weights.shape[-1] + n)
                     ),
                 )
+
+        # All EP ranks, including ranks with no local tokens, must participate
+        # in UltraEP placement and weight synchronization in identical order.
+        weights_ready_event = None
+        if self.moe_load_balancer is not None:
+            from moe_load_balancer import L3Request
+            from sglang.srt.eplb.moe_load_balancer_glue import (
+                stage_from_forward_batch,
+            )
+
+            request = L3Request(
+                layer_id=self.layer_id,
+                logical_topk_ids=topk_output.topk_ids,
+                topk_weights=topk_output.topk_weights,
+                stage=stage_from_forward_batch(forward_batch),
+            )
+            placement = self.moe_load_balancer.compute_placement(request)
+            weights_ready_event = self.expert_transfer.apply_async(placement)
+            decision = self.moe_load_balancer.reroute(
+                placement=placement,
+                logical_topk_ids=topk_output.topk_ids,
+                topk_weights=topk_output.topk_weights,
+            )
+            topk_output = topk_output._replace(
+                topk_ids=decision.routed_physical_topk_ids,
+                topk_weights=decision.topk_weights,
+            )
 
         if sbo_overlap_dispatch_flag:
             shared_output = None
@@ -1125,10 +1160,19 @@ class DeepseekV2MoE(nn.Module):
                 self.experts.dispatcher.register_post_combine_hook(_post_combine_hook)
             )
 
-        final_hidden_states = self.experts(
-            hidden_states=hidden_states,
-            topk_output=topk_output,
-        )
+        if weights_ready_event is None:
+            final_hidden_states = self.experts(
+                hidden_states=hidden_states,
+                topk_output=topk_output,
+            )
+        else:
+            # Dispatch overlaps the transfer stream. Only expert GEMMs wait.
+            dispatch_output = self.experts.dispatch(hidden_states, topk_output)
+            weights_ready_event.current_stream_wait()
+            combine_input = self.experts.run_moe_core(dispatch_output)
+            final_hidden_states = self.experts.dispatcher.combine(
+                combine_input=combine_input
+            )
 
         if (
             hidden_states.shape[0] > 0
