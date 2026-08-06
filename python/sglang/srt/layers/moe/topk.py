@@ -284,22 +284,29 @@ class TopK(MultiPlatformOp):
             assert num_expert_group is not None and topk_group is not None
 
         self.layer_id = layer_id
-        if num_fused_shared_experts > 0:
+        try:
             from sglang.srt.server_args import get_global_server_args
 
-            try:
-                self.enable_deepep_waterfill = (
-                    get_global_server_args().enable_deepep_waterfill
-                )
-            except ValueError:
-                self.enable_deepep_waterfill = False
-        else:
-            self.enable_deepep_waterfill = False
+            global_server_args = get_global_server_args()
+        except ValueError:
+            global_server_args = None
+        self.enable_ultraep = (
+            global_server_args is not None and global_server_args.enable_ultraep
+        )
+        self.enable_deepep_waterfill = (
+            num_fused_shared_experts > 0
+            and global_server_args is not None
+            and global_server_args.enable_deepep_waterfill
+        )
 
         self.moe_load_balancer = None
         if self.enable_deepep_waterfill:
             top_k -= num_fused_shared_experts
             num_fused_shared_experts = 0
+            output_format = TopKOutputFormat.STANDARD
+        if self.enable_ultraep:
+            # L3 consumes logical IDs and returns transient physical IDs before
+            # DeepEP dispatch, so bypassed TopK output is not supported.
             output_format = TopKOutputFormat.STANDARD
 
         # flashinfer_mxfp4 backend only: True -> STANDARD (Mxfp4FlashinferTrtllmMoEMethod

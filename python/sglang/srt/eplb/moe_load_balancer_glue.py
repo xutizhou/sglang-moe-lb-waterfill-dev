@@ -37,6 +37,84 @@ _FORWARD_MODE_TO_STAGE = {
 }
 
 
+def register_ultraep_l3(*, model, model_config, server_args, moe_load_balancer) -> int:
+    """Attach UltraEP L3 placement, L2 routing, and transfer to MoE layers."""
+
+    try:
+        from moe_load_balancer.policies.l2.ultraep import UltraEPL2Router
+        from moe_load_balancer.policies.l3 import UltraEPL3Policy
+        from sglang.srt.eplb.ultraep_expert_transfer import UltraEPExpertTransfer
+    except ImportError as exc:
+        raise ImportError(
+            "--enable-ultraep requires moe-load-balancer installed with its "
+            "UltraEP backend extension (MLB_BUILD_ULTRAEP=1)."
+        ) from exc
+
+    num_logical_experts = getattr(model_config.hf_config, "n_routed_experts", None)
+    if num_logical_experts is None:
+        raise ValueError("UltraEP currently supports DeepSeek-style n_routed_experts.")
+
+    layer_storages = {}
+    moe_modules = []
+    for module in model.modules():
+        if not (
+            hasattr(module, "forward_deepep")
+            and hasattr(module, "experts")
+            and hasattr(module, "layer_id")
+        ):
+            continue
+        if getattr(module, "num_fused_shared_experts", 0) != 0:
+            raise ValueError("UltraEP requires shared-expert fusion to be disabled.")
+
+        experts = module.experts
+        if experts.quant_method is None:
+            raise ValueError("UltraEP requires a configured MoE quantization method.")
+        try:
+            tensor_view = experts.quant_method.get_expert_replication_tensor_view(
+                experts
+            )
+        except NotImplementedError as exc:
+            raise ValueError(
+                "UltraEP does not support expert replication for quantization "
+                f"method {type(experts.quant_method).__name__}."
+            ) from exc
+
+        layer_storages[module.layer_id] = tensor_view
+        moe_modules.append(module)
+
+    if not layer_storages:
+        raise ValueError("UltraEP did not find any compatible DeepEP MoE layers.")
+
+    ep_group = get_moe_ep_group()
+    expert_transfer = UltraEPExpertTransfer(
+        group=ep_group.device_group,
+        layer_storages=layer_storages,
+        num_logical_experts=num_logical_experts,
+        num_redundant_experts_per_rank=(
+            server_args.ultraep_num_redundant_experts_per_rank
+        ),
+    )
+    placement_policy = UltraEPL3Policy(
+        group=ep_group.device_group,
+        layer_ids=tuple(layer_storages),
+        num_logical_experts=num_logical_experts,
+        ep_size=ep_group.world_size,
+        num_redundant_experts_per_rank=(
+            server_args.ultraep_num_redundant_experts_per_rank
+        ),
+        manager=expert_transfer.manager,
+    )
+    routing_policy = UltraEPL2Router(manager=expert_transfer.manager)
+    # The L3 policy is the shared manager's lifecycle owner; the L2 router and
+    # SGLang transfer adapter only borrow it.
+    moe_load_balancer.register_l3_policy(placement_policy)
+    moe_load_balancer.register_routing_policy("ultraep", routing_policy)
+    for module in moe_modules:
+        module.moe_load_balancer = moe_load_balancer
+        module.expert_transfer = expert_transfer
+    return len(moe_modules)
+
+
 def route_topk_with_mlb(
     *,
     moe_load_balancer,
@@ -96,7 +174,7 @@ def route_topk_with_mlb(
             )
 
     snapshot = to_placement_snapshot(metadata, layer_id)
-    stage = _stage_from_forward_batch(forward_batch)
+    stage = stage_from_forward_batch(forward_batch)
     request = to_routing_request(
         layer_id=layer_id,
         logical_topk_ids=topk_output.topk_ids,
@@ -170,7 +248,7 @@ def _dynamic_waterfill_load(
     return payload[:world_size], payload[world_size:]
 
 
-def _stage_from_forward_batch(forward_batch) -> Optional[str]:
+def stage_from_forward_batch(forward_batch) -> Optional[str]:
     if forward_batch is None:
         return None
     forward_mode = getattr(forward_batch, "forward_mode", None)

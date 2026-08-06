@@ -515,5 +515,37 @@ class TestNgramExternalSamArgs(CustomTestCase):
         self.assertIn("external-corpus-max-tokens", str(context.exception))
 
 
+class TestUltraEPArgs(CustomTestCase):
+    def test_ultraep_reserves_global_slots_and_disables_unsupported_paths(self):
+        server_args = ServerArgs(
+            model_path="dummy",
+            tp_size=2,
+            ep_size=2,
+            moe_a2a_backend="deepep",
+            enable_ultraep=True,
+            ultraep_num_redundant_experts_per_rank=2,
+        )
+        server_args._handle_eplb_and_dispatch()
+
+        self.assertEqual(server_args.ep_num_redundant_experts, 4)
+        self.assertTrue(server_args.disable_shared_experts_fusion)
+        self.assertFalse(server_args.enforce_shared_experts_fusion)
+        self.assertIsNone(server_args.ep_dispatch_algorithm)
+        self.assertTrue(server_args.disable_cuda_graph)
+
+    def test_ultraep_rejects_eplb(self):
+        server_args = ServerArgs(
+            model_path="dummy",
+            tp_size=2,
+            ep_size=2,
+            moe_a2a_backend="deepep",
+            enable_ultraep=True,
+            enable_eplb=True,
+            ultraep_num_redundant_experts_per_rank=1,
+        )
+        with self.assertRaisesRegex(ValueError, "cannot currently be combined"):
+            server_args._handle_eplb_and_dispatch()
+
+
 if __name__ == "__main__":
     unittest.main()
