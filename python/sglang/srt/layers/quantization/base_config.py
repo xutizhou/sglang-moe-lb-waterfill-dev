@@ -155,7 +155,14 @@ class FusedMoEMethodBase(QuantizeMethodBase):
         )
 
         auxiliary_tensors = {}
-        for name in ("b13", "b2", "w13_zp", "w2_zp"):
+        for name in (
+            "a13_scale",
+            "a2_scale",
+            "b13",
+            "b2",
+            "w13_zp",
+            "w2_zp",
+        ):
             tensor = getattr(quant_info, name, None)
             if (
                 isinstance(tensor, torch.Tensor)

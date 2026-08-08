@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
+from sglang.srt.environ import envs
 from sglang.srt.server_args import PortArgs, ServerArgs, prepare_server_args
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import (
@@ -532,6 +533,36 @@ class TestUltraEPArgs(CustomTestCase):
         self.assertFalse(server_args.enforce_shared_experts_fusion)
         self.assertIsNone(server_args.ep_dispatch_algorithm)
         self.assertTrue(server_args.disable_cuda_graph)
+        self.assertTrue(server_args.disable_piecewise_cuda_graph)
+        self.assertEqual(server_args.ultraep_placement_refresh_interval, 64)
+        self.assertEqual(server_args.ultraep_placement_refresh_min_tokens, 512)
+
+    def test_ultraep_rejects_nonpositive_placement_refresh_interval(self):
+        server_args = ServerArgs(
+            model_path="dummy",
+            tp_size=2,
+            ep_size=2,
+            moe_a2a_backend="deepep",
+            enable_ultraep=True,
+            ultraep_num_redundant_experts_per_rank=1,
+            ultraep_placement_refresh_interval=0,
+        )
+        with self.assertRaisesRegex(ValueError, "refresh-interval"):
+            server_args._handle_eplb_and_dispatch()
+
+    def test_ultraep_rejects_nonpositive_placement_refresh_min_tokens(self):
+        server_args = ServerArgs(
+            model_path="dummy",
+            enable_ultraep=True,
+            ep_size=2,
+            moe_a2a_backend="deepep",
+            ultraep_num_redundant_experts_per_rank=1,
+            ultraep_placement_refresh_min_tokens=0,
+        )
+        with self.assertRaisesRegex(
+            ValueError, "ultraep-placement-refresh-min-tokens"
+        ):
+            server_args._handle_eplb_and_dispatch()
 
     def test_ultraep_rejects_eplb(self):
         server_args = ServerArgs(
@@ -545,6 +576,94 @@ class TestUltraEPArgs(CustomTestCase):
         )
         with self.assertRaisesRegex(ValueError, "cannot currently be combined"):
             server_args._handle_eplb_and_dispatch()
+
+    def test_ultraep_rejects_speculative_decoding(self):
+        server_args = ServerArgs(
+            model_path="dummy",
+            tp_size=2,
+            ep_size=2,
+            moe_a2a_backend="deepep",
+            enable_ultraep=True,
+            speculative_algorithm="EAGLE",
+            ultraep_num_redundant_experts_per_rank=1,
+        )
+        with self.assertRaisesRegex(ValueError, "speculative decoding"):
+            server_args._handle_eplb_and_dispatch()
+
+    def test_ultraep_rejects_expert_distribution_metrics(self):
+        server_args = ServerArgs(
+            model_path="dummy",
+            tp_size=2,
+            ep_size=2,
+            moe_a2a_backend="deepep",
+            enable_ultraep=True,
+            enable_expert_distribution_metrics=True,
+            ultraep_num_redundant_experts_per_rank=1,
+        )
+        with self.assertRaisesRegex(ValueError, "expert-distribution metrics"):
+            server_args._handle_eplb_and_dispatch()
+
+    def test_ultraep_rejects_mega_moe_transformed_weights(self):
+        server_args = ServerArgs(
+            model_path="dummy",
+            tp_size=2,
+            ep_size=2,
+            moe_a2a_backend="deepep",
+            enable_ultraep=True,
+            ultraep_num_redundant_experts_per_rank=1,
+        )
+        with envs.SGLANG_OPT_USE_DEEPGEMM_MEGA_MOE.override(True):
+            with self.assertRaisesRegex(ValueError, "transformed expert weights"):
+                server_args._handle_eplb_and_dispatch()
+
+    def test_ultraep_rejects_expert_lora_weights(self):
+        for lora_args in (
+            {"enable_lora": True},
+            {"lora_paths": ["dummy-adapter"]},
+        ):
+            with self.subTest(lora_args=lora_args):
+                server_args = ServerArgs(
+                    model_path="dummy",
+                    tp_size=2,
+                    ep_size=2,
+                    moe_a2a_backend="deepep",
+                    enable_ultraep=True,
+                    ultraep_num_redundant_experts_per_rank=1,
+                    **lora_args,
+                )
+                with self.assertRaisesRegex(ValueError, "per-expert LoRA weights"):
+                    server_args._handle_eplb_and_dispatch()
+
+    def test_ultraep_memory_saver_requires_weights_cpu_backup(self):
+        server_args = ServerArgs(
+            model_path="dummy",
+            tp_size=2,
+            ep_size=2,
+            moe_a2a_backend="deepep",
+            enable_ultraep=True,
+            enable_memory_saver=True,
+            ultraep_num_redundant_experts_per_rank=1,
+        )
+        with self.assertRaisesRegex(ValueError, "enable-weights-cpu-backup"):
+            server_args._handle_eplb_and_dispatch()
+
+        server_args.enable_weights_cpu_backup = True
+        server_args._handle_eplb_and_dispatch()
+
+    def test_ultraep_rejects_flashinfer_trtllm_derived_expert_tensors(self):
+        for backend in ("flashinfer_trtllm", "flashinfer_trtllm_routed"):
+            with self.subTest(backend=backend):
+                server_args = ServerArgs(
+                    model_path="dummy",
+                    tp_size=2,
+                    ep_size=2,
+                    moe_a2a_backend="deepep",
+                    moe_runner_backend=backend,
+                    enable_ultraep=True,
+                    ultraep_num_redundant_experts_per_rank=1,
+                )
+                with self.assertRaisesRegex(ValueError, "derived per-expert tensors"):
+                    server_args._handle_eplb_and_dispatch()
 
 
 if __name__ == "__main__":

@@ -114,14 +114,14 @@ class ExpertLocationMetadata:
     ):
         """Initialize UltraEP's fixed masters and rank-local scratch slots."""
         from moe_load_balancer.policies.l3 import (
-            build_ultraep_physical_to_logical_map,
+            build_ultraep_initial_physical_to_logical_map,
         )
 
         common = ExpertLocationMetadata._init_common(server_args, model_config)
         if common is None:
             return None
         model_location = common["model_config_for_expert_location"]
-        physical_to_logical_map = build_ultraep_physical_to_logical_map(
+        physical_to_logical_map = build_ultraep_initial_physical_to_logical_map(
             num_layers=model_location.num_layers,
             num_logical_experts=model_location.num_logical_experts,
             ep_size=common["ep_size"],
@@ -212,9 +212,7 @@ class ExpertLocationMetadata:
         return ExpertLocationMetadata._init_raw(
             server_args=server_args,
             ep_size=common["ep_size"],
-            physical_to_logical_map=maps.physical_to_logical_map.to(
-                server_args.device
-            ),
+            physical_to_logical_map=maps.physical_to_logical_map.to(server_args.device),
             logical_to_all_physical_map=maps.logical_to_all_physical_map.to(
                 server_args.device
             ),
@@ -662,7 +660,6 @@ def compute_initial_expert_location_metadata(
         raise NotImplementedError(
             f"Unknown init_expert_location format ({list(data_dict.keys())=})"
         )
-
 
 
 def _mlb_eplb_active_ranks(server_args):

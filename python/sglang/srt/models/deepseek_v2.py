@@ -384,6 +384,7 @@ class MoEGate(nn.Module):
 
 
 class DeepseekV2MoE(nn.Module):
+    supports_ultraep_external_transfer = True
 
     def __init__(
         self,
@@ -631,8 +632,14 @@ class DeepseekV2MoE(nn.Module):
         # ModelRunner attaches its existing MLB orchestrator after registering
         # UltraEP's L3 placement policy and L2 physical router.
         self.moe_load_balancer = None
-        # SGLang owns expert tensors and schedules transfer on the shared manager.
+        # SGLang owns expert tensors and the standalone UltraEP transfer adapter.
         self.expert_transfer = None
+        self._ultraep_load_buffers = None
+        self._ultraep_balance_profiler = None
+        self._ultraep_active_placement = None
+        self._ultraep_refresh_interval = 1
+        self._ultraep_refresh_min_tokens = 1
+        self._ultraep_prefill_batches_since_refresh = 0
         self._fuse_shared_experts_inside_sbo = SboFlags.fuse_shared_experts_inside_sbo()
 
     def get_moe_weights(self):
@@ -648,9 +655,7 @@ class DeepseekV2MoE(nn.Module):
             # DeepEP stores one fused shared-expert slot after this rank's
             # routed experts. EPLB must migrate only routed expert weights;
             # the shared slot stays fixed on its home rank.
-            weights = [
-                weight[: -self.num_fused_shared_experts] for weight in weights
-            ]
+            weights = [weight[: -self.num_fused_shared_experts] for weight in weights]
         return weights
 
     def forward(
@@ -963,7 +968,7 @@ class DeepseekV2MoE(nn.Module):
                     ExpertLocationDispatchInfo.init_new(
                         layer_id=self.layer_id,
                     )
-                    if self.moe_load_balancer is None
+                    if self.expert_transfer is None
                     else None
                 ),
                 forward_batch=forward_batch,
@@ -989,34 +994,126 @@ class DeepseekV2MoE(nn.Module):
         # All EP ranks, including ranks with no local tokens, must participate
         # in UltraEP placement and weight synchronization in identical order.
         weights_ready_event = None
-        if self.moe_load_balancer is not None:
+        if self.expert_transfer is not None:
+            if self.moe_load_balancer is None:
+                raise RuntimeError("UltraEP transfer requires MoELoadBalancer.")
+            if self._ultraep_load_buffers is None:
+                raise RuntimeError("UltraEP transfer requires load buffers.")
             from moe_load_balancer import L3Request, RoutingRequest
+
             from sglang.srt.eplb.moe_load_balancer_glue import (
+                collect_ultraep_logical_loads,
                 stage_from_forward_batch,
             )
 
-            # Placement and L2 routing consume the same IDs. Normalize once so
-            # the routing path does not enqueue a second int32-to-int64 GPU cast
-            # while UltraEP weight synchronization is occupying the SMs.
-            ultraep_topk_ids = topk_output.topk_ids.to(dtype=torch.int64).contiguous()
-            stage = stage_from_forward_batch(forward_batch)
-            placement_request = L3Request(
-                layer_id=self.layer_id,
-                logical_topk_ids=ultraep_topk_ids,
-                topk_weights=topk_output.topk_weights,
-                stage=stage,
+            # Keep the router's native dtype through MLB. The UltraEP adapter
+            # materializes int64 IDs only on the infrequent collection path;
+            # MLB L2 fuses int32 logical IDs into int64 physical output IDs.
+            ultraep_topk_ids = topk_output.topk_ids.contiguous()
+            ultraep_stage = stage_from_forward_batch(forward_batch)
+            active_placement = self._ultraep_active_placement
+            # Scheduler-side CPU metadata is identical on every EP rank, so it
+            # is safe to use for a collective refresh decision. In DP-attention
+            # mode, local stages may differ within one synchronized MLP step.
+            global_num_tokens = getattr(
+                forward_batch, "original_global_num_tokens_cpu", None
             )
-            placement = self.moe_load_balancer.compute_placement(placement_request)
-            weights_ready_event = self.expert_transfer.apply_async(placement)
+            if global_num_tokens is not None:
+                prefill_like = bool(getattr(forward_batch, "is_extend_in_batch", False))
+            else:
+                prefill_like = ultraep_stage in ("prefill", "mixed")
+            # Use real, unpadded scheduler token counts rather than a potentially
+            # padded or rank-local top-k tensor shape.
+            if global_num_tokens:
+                refresh_batch_is_representative = (
+                    sum(global_num_tokens) >= self._ultraep_refresh_min_tokens
+                )
+            else:
+                non_padded_tokens = getattr(
+                    forward_batch, "num_token_non_padded_cpu", None
+                )
+                if non_padded_tokens is None:
+                    non_padded_tokens = ultraep_topk_ids.shape[0]
+                refresh_batch_is_representative = (
+                    non_padded_tokens >= self._ultraep_refresh_min_tokens
+                )
+            refresh_due = active_placement is None
+            if active_placement is not None and prefill_like:
+                self._ultraep_prefill_batches_since_refresh = min(
+                    self._ultraep_prefill_batches_since_refresh + 1,
+                    self._ultraep_refresh_interval,
+                )
+                refresh_due = (
+                    self._ultraep_prefill_batches_since_refresh
+                    >= self._ultraep_refresh_interval
+                    and refresh_batch_is_representative
+                )
+            collected_loads = None
+            if refresh_due:
+                collected_loads = collect_ultraep_logical_loads(
+                    logical_topk_ids=ultraep_topk_ids,
+                    buffers=self._ultraep_load_buffers,
+                    expert_transfer=self.expert_transfer,
+                )
+
+            if refresh_due:
+                if collected_loads is None:
+                    raise RuntimeError(
+                        "UltraEP placement refresh requires collected logical loads."
+                    )
+                # Solve from the current batch. Placement must precede L2, while
+                # expert transfer and row materialization overlap DeepEP dispatch.
+                with torch.cuda.stream(self.expert_transfer.communication_stream):
+                    placement_request = L3Request(
+                        layer_id=self.layer_id,
+                        logical_topk_ids=ultraep_topk_ids,
+                        topk_weights=topk_output.topk_weights,
+                        logical_loads_per_rank=collected_loads.loads_per_rank,
+                        stage=ultraep_stage,
+                    )
+                    active_placement = self.moe_load_balancer.compute_placement(
+                        placement_request
+                    )
+                    placement_ready_event = self.expert_transfer.record_placement_ready(
+                        self.layer_id
+                    )
+                    # Keep the refresh chain fully asynchronous. Comparing CUDA
+                    # placement tensors to drive a Python branch synchronizes the
+                    # host, while real-workload placements almost always change.
+                    weights_ready_event = self.expert_transfer.apply_async(
+                        active_placement
+                    )
+                placement_ready_event.current_stream_wait()
+                self._ultraep_active_placement = active_placement
+                # A tiny bootstrap is required for correctness, but it is a
+                # noisy placement sample. Keep the cadence saturated so the
+                # next representative prefill replaces it immediately.
+                self._ultraep_prefill_batches_since_refresh = (
+                    0
+                    if refresh_batch_is_representative
+                    else self._ultraep_refresh_interval
+                )
+
+            if active_placement is None:
+                raise RuntimeError("UltraEP has no active placement for L2 routing.")
             routing_request = RoutingRequest(
                 layer_id=self.layer_id,
                 logical_topk_ids=ultraep_topk_ids,
                 topk_weights=topk_output.topk_weights,
                 policies=("ultraep",),
-                transient_placement=placement,
-                stage=stage,
+                transient_placement=active_placement,
+                stage=ultraep_stage,
             )
             decision = self.moe_load_balancer.route_tokens(routing_request)
+            if self._ultraep_balance_profiler is not None and refresh_due:
+                # Profiling is a diagnostic path. Wait for the matching load
+                # collection before its shared result buffer is read.
+                collected_loads.current_stream_wait()
+                self._ultraep_balance_profiler.record_refresh(
+                    layer_id=self.layer_id,
+                    routed_physical_topk_ids=decision.routed_physical_topk_ids,
+                    placement=active_placement,
+                )
             topk_output = topk_output._replace(
                 topk_ids=decision.routed_physical_topk_ids,
                 topk_weights=decision.topk_weights,
@@ -1034,6 +1131,7 @@ class DeepseekV2MoE(nn.Module):
             def _post_dispatch_hook(
                 dispatcher: BaseDispatcher, dispatch_output: DispatchOutput
             ):
+
                 combine_overlap_args, down_gemm_overlap_args, meta_overlap_args = (
                     compute_overlap_args(dispatch_output, self.alt_stream)
                 )
@@ -1073,7 +1171,6 @@ class DeepseekV2MoE(nn.Module):
             def _post_dispatch_hook(
                 dispatcher: BaseDispatcher, dispatch_output: DispatchOutput
             ):
-
                 combine_overlap_args, down_gemm_overlap_args, meta_overlap_args = (
                     compute_overlap_args(dispatch_output, self.alt_stream)
                 )
@@ -1170,20 +1267,26 @@ class DeepseekV2MoE(nn.Module):
                 self.experts.dispatcher.register_post_combine_hook(_post_combine_hook)
             )
 
-        if weights_ready_event is None:
-            final_hidden_states = self.experts(
-                hidden_states=hidden_states,
-                topk_output=topk_output,
+        if weights_ready_event is not None:
+            # UltraEP's exact incoming-epoch guard and local row copies run on
+            # the copy stream while DeepEP dispatch proceeds independently.
+            # The expert GEMMs wait only at their actual consumer boundary.
+            def _wait_for_ultraep_weights(
+                dispatcher: BaseDispatcher, dispatch_output: DispatchOutput
+            ):
+                weights_ready_event.current_stream_wait()
+                ultraep_ready_hook_handle.remove()
+
+            ultraep_ready_hook_handle = (
+                self.experts.dispatcher.register_post_dispatch_hook(
+                    _wait_for_ultraep_weights
+                )
             )
-        else:
-            # Transfer and local row DMA were already scheduled asynchronously.
-            # DeepEP dispatch overlaps them; only expert GEMMs wait for completion.
-            dispatch_output = self.experts.dispatch(hidden_states, topk_output)
-            weights_ready_event.current_stream_wait()
-            combine_input = self.experts.run_moe_core(dispatch_output)
-            final_hidden_states = self.experts.dispatcher.combine(
-                combine_input=combine_input
-            )
+
+        final_hidden_states = self.experts(
+            hidden_states=hidden_states,
+            topk_output=topk_output,
+        )
 
         if (
             hidden_states.shape[0] > 0

@@ -343,9 +343,7 @@ class TopK(MultiPlatformOp):
                 )
             return topk_output
         if not TopKOutputChecker.format_is_standard(topk_output):
-            raise RuntimeError(
-                "MLB L2 routing requires StandardTopKOutput."
-            )
+            raise RuntimeError("MLB L2 routing requires StandardTopKOutput.")
 
         from sglang.srt.eplb.moe_load_balancer_glue import route_topk_with_mlb
 
@@ -1467,9 +1465,7 @@ def select_experts(
     )
 
     if not defer_expert_recording:
-        get_global_expert_distribution_recorder().on_select_experts(
-            topk_ids=topk_ids
-        )
+        get_global_expert_distribution_recorder().on_select_experts(topk_ids=topk_ids)
 
     return StandardTopKOutput(topk_weights, topk_ids, router_logits)
 

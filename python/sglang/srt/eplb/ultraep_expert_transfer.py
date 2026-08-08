@@ -3,22 +3,67 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Mapping, Optional
+from typing import TYPE_CHECKING, Mapping
 
 import torch
 import torch.distributed as dist
 
 if TYPE_CHECKING:
     from moe_load_balancer import L3Placement
-    from moe_load_balancer.kernels.ultraep import Manager
+    from ultra_ep import CollectedExpertLoads, Manager
 
     from sglang.srt.layers.quantization.base_config import (
         ExpertReplicationTensorView,
     )
 
 
+_REQUIRED_ULTRAEP_MANAGER_API = (
+    "close",
+    "collect_topk_loads",
+    "get_comm_stream",
+    "logical_loads_per_rank",
+    "register_master_tensors",
+    "replica_staging_buffers",
+    "transfer",
+)
+_REQUIRED_EXTERNAL_TRANSFER_API_VERSION = 2
+
+
+def _require_external_transfer_api(ultra_ep_module) -> type:
+    """Reject the upstream package before it allocates an NVSHMEM manager."""
+
+    version = getattr(
+        ultra_ep_module,
+        "EXTERNAL_PLACEMENT_TRANSFER_API_VERSION",
+        None,
+    )
+    if (
+        not isinstance(version, int)
+        or version < _REQUIRED_EXTERNAL_TRANSFER_API_VERSION
+    ):
+        raise ImportError(
+            "--enable-ultraep requires external-placement transfer API "
+            f"version >= {_REQUIRED_EXTERNAL_TRANSFER_API_VERSION}; got {version!r}."
+        )
+    manager_type = getattr(ultra_ep_module, "Manager", None)
+    if manager_type is None:
+        raise ImportError("--enable-ultraep requires ultra_ep.Manager.")
+    missing = [
+        name
+        for name in _REQUIRED_ULTRAEP_MANAGER_API
+        if not hasattr(manager_type, name)
+    ]
+    if missing:
+        raise ImportError(
+            "--enable-ultraep requires an UltraEP build with the "
+            "external-placement transfer API; the installed Manager is missing: "
+            + ", ".join(missing)
+        )
+    return manager_type
+
+
 class ExpertTransferEvent:
-    """Wait for an already scheduled local expert materialization."""
+    """Wait for one already scheduled CUDA-stream boundary."""
 
     def __init__(self, event: torch.cuda.Event) -> None:
         self._event = event
@@ -36,13 +81,13 @@ class _LayerStorage:
 
 
 class UltraEPExpertTransfer:
-    """Synchronize experts with UltraEP from MLB-owned GPU placement maps.
+    """SGLang adapter for UltraEP's external-placement transfer API.
 
-    One UltraEP manager is shared with MLB's L3 placement policy and L2 router.
-    UltraEP transfers into its NVSHMEM symmetric replica buffers; a local CUDA
-    stream then materializes those rows in SGLang-owned quantized expert storage.
-    No placement tensor is copied to the host and no Python peer-operation plan
-    is constructed.
+    MLB owns placement and rerouting algorithms. This adapter owns the standalone
+    UltraEP communication manager, registers SGLang's expert tensors, and
+    materializes UltraEP's NVSHMEM staging rows in SGLang-owned quantized expert
+    storage. Placement stays on device and no Python peer-operation plan is
+    constructed.
     """
 
     def __init__(
@@ -52,10 +97,17 @@ class UltraEPExpertTransfer:
         layer_storages: Mapping[int, ExpertReplicationTensorView],
         num_logical_experts: int,
         num_redundant_experts_per_rank: int,
+        overlap_transfer_with_dispatch: bool = False,
     ) -> None:
-        from moe_load_balancer.kernels.ultraep import Manager
+        try:
+            import ultra_ep
+        except ImportError as exc:
+            raise ImportError(
+                "--enable-ultraep requires the standalone UltraEP package "
+                "built with its NVSHMEM extension."
+            ) from exc
+        Manager = _require_external_transfer_api(ultra_ep)
 
-        self._group = group
         self._ep_size = group.size()
         if self._ep_size <= 1:
             raise ValueError(
@@ -72,6 +124,7 @@ class UltraEPExpertTransfer:
 
         self._num_local_master_experts = num_logical_experts // self._ep_size
         self._num_local_redundant_experts = num_redundant_experts_per_rank
+        self._overlap_transfer_with_dispatch = overlap_transfer_with_dispatch
         self._num_local_physical_experts = (
             self._num_local_master_experts + self._num_local_redundant_experts
         )
@@ -82,7 +135,7 @@ class UltraEPExpertTransfer:
         reference = next(iter(self._layers.values()))
         self._validate_consistent_layout(reference)
 
-        self.manager: Manager = Manager(
+        self._manager: Manager = Manager(
             group=group,
             num_layers=max(self._layers) + 1,
             num_local_master_experts=self._num_local_master_experts,
@@ -110,13 +163,53 @@ class UltraEPExpertTransfer:
             layer_id: self._build_copy_pairs(storage)
             for layer_id, storage in self._layers.items()
         }
+        self._placement_ready_events = {
+            layer_id: torch.cuda.Event() for layer_id in self._layers
+        }
         self._last_copy_event: torch.cuda.Event | None = None
+        self._closed = False
 
-    def apply_async(self, placement: L3Placement) -> Optional[ExpertTransferEvent]:
-        """Enqueue communication and local copies without blocking the caller."""
+    @property
+    def nvl_domain_size(self) -> int:
+        """Number of EP ranks in one NVLink placement domain."""
 
-        if placement.metadata.get("placement_refreshed") is False:
-            return None
+        return self._manager.nvl_domain_size
+
+    @property
+    def logical_loads_per_rank(self) -> torch.Tensor:
+        """UltraEP-owned NVSHMEM result buffer for load collection."""
+
+        return self._manager.logical_loads_per_rank
+
+    @property
+    def communication_stream(self) -> torch.cuda.Stream:
+        """Stream shared by load collection, MLB placement, and transfer."""
+
+        return self._manager.get_comm_stream()
+
+    def collect_topk_loads_async(
+        self, logical_topk_ids: torch.Tensor
+    ) -> CollectedExpertLoads:
+        """Adapt native router IDs and enqueue UltraEP's fused load collection."""
+
+        collection_topk_ids = logical_topk_ids.to(dtype=torch.int64).contiguous()
+        with torch.cuda.nvtx.range("UltraEP NVSHMEM load fcollect"):
+            return self._manager.collect_topk_loads(collection_topk_ids)
+
+    def record_placement_ready(self, layer_id: int) -> ExpertTransferEvent:
+        """Record the boundary between MLB placement and expert transfer."""
+
+        try:
+            event = self._placement_ready_events[layer_id]
+        except KeyError as exc:
+            raise KeyError(
+                f"No expert storage registered for layer {layer_id}."
+            ) from exc
+        event.record(self.communication_stream)
+        return ExpertTransferEvent(event)
+
+    def apply_async(self, placement: L3Placement) -> ExpertTransferEvent:
+        """Enqueue transfer and materialization; return its consumer event."""
 
         try:
             copy_pairs = self._copy_pairs[placement.layer_id]
@@ -129,24 +222,48 @@ class UltraEPExpertTransfer:
         if self._last_copy_event is not None:
             current_stream.wait_event(self._last_copy_event)
 
-        transfer_event = self.manager.weight_sync_from_placement(
-            placement.layer_id,
-            placement.physical_to_logical_map,
-            placement.logical_to_physical_map,
-            placement.logical_replica_counts,
-            async_finish=True,
+        completion_scope = (
+            "outgoing" if self._overlap_transfer_with_dispatch else "global"
         )
-        return ExpertTransferEvent(self._materialize(transfer_event, copy_pairs))
+        transferred = self._manager.transfer(
+            layer_id=placement.layer_id,
+            physical_to_logical_map=placement.physical_to_logical_map,
+            logical_to_physical_map=placement.logical_to_physical_map,
+            logical_replica_counts=placement.logical_replica_counts,
+            completion_scope=completion_scope,
+        )
+        return ExpertTransferEvent(
+            self._materialize(
+                transferred,
+                copy_pairs,
+                wait_for_incoming=self._overlap_transfer_with_dispatch,
+            )
+        )
+
+    def close(self) -> None:
+        """Release the standalone UltraEP communication runtime once."""
+
+        if self._closed:
+            return
+        if self._last_copy_event is not None:
+            self._last_copy_event.synchronize()
+        self._manager.close()
+        self._closed = True
 
     def _materialize(
         self,
         transfer_event,
         copy_pairs: tuple[tuple[torch.Tensor, torch.Tensor], ...],
+        *,
+        wait_for_incoming: bool,
     ) -> torch.cuda.Event:
-        """Copy shared staging rows after the transfer on a dedicated stream."""
+        """Materialize staging rows asynchronously on the copy stream."""
 
         with torch.cuda.stream(self._copy_stream):
-            transfer_event.current_stream_wait()
+            if wait_for_incoming:
+                transfer_event.current_stream_wait_for_incoming()
+            else:
+                transfer_event.current_stream_wait()
             for destination, source in copy_pairs:
                 destination.copy_(source)
             event = self._copy_stream.record_event()
@@ -233,7 +350,7 @@ class UltraEPExpertTransfer:
     def _register_master_rows(self) -> None:
         master_count = self._num_local_master_experts
         for layer_id, storage in self._layers.items():
-            self.manager.construct_local_master_ptr_pool(
+            self._manager.register_master_tensors(
                 layer_id,
                 [storage.fc1[index] for index in range(master_count)],
                 [storage.fc2[index] for index in range(master_count)],
@@ -253,19 +370,20 @@ class UltraEPExpertTransfer:
         self, storage: _LayerStorage
     ) -> tuple[tuple[torch.Tensor, torch.Tensor], ...]:
         master_count = self._num_local_master_experts
-        replica_fc1 = self.manager.local_replica_fc1_weight_buffer.view(
+        staging = self._manager.replica_staging_buffers
+        replica_fc1 = staging.fc1_weight.view(
             self._num_local_redundant_experts, *storage.fc1.shape[1:]
         )
-        replica_fc2 = self.manager.local_replica_fc2_weight_buffer.view(
+        replica_fc2 = staging.fc2_weight.view(
             self._num_local_redundant_experts, *storage.fc2.shape[1:]
         )
         replica_fc1_scale = replica_fc2_scale = None
         if storage.fc1_scale is not None:
-            replica_fc1_scale = self.manager.local_replica_fc1_weight_scale_buffer.view(
+            replica_fc1_scale = staging.fc1_weight_scale.view(
                 self._num_local_redundant_experts,
                 *storage.fc1_scale.shape[1:],
             )
-            replica_fc2_scale = self.manager.local_replica_fc2_weight_scale_buffer.view(
+            replica_fc2_scale = staging.fc2_weight_scale.view(
                 self._num_local_redundant_experts,
                 *storage.fc2_scale.shape[1:],
             )

@@ -13,10 +13,10 @@ from types import SimpleNamespace
 
 import torch
 import torch.distributed as dist
-
 from moe_load_balancer import L3Request, MoELoadBalancer, RoutingRequest
 from moe_load_balancer.policies.l2.ultraep import UltraEPL2Router
 from moe_load_balancer.policies.l3 import UltraEPL3Policy
+
 from sglang.srt.eplb.ultraep_expert_transfer import UltraEPExpertTransfer
 
 
@@ -84,19 +84,20 @@ def main() -> None:
         layer_storages={0: storage},
         num_logical_experts=logical_experts,
         num_redundant_experts_per_rank=replicas,
+        overlap_transfer_with_dispatch=True,
     )
     placement_policy = UltraEPL3Policy(
-        group=group,
         layer_ids=(0,),
         num_logical_experts=logical_experts,
         ep_size=world_size,
         num_redundant_experts_per_rank=replicas,
-        manager=transfer.manager,
+        rank=rank,
+        num_nvl_ranks=transfer.nvl_domain_size,
     )
     load_balancer = MoELoadBalancer(
         placement_planners={},
         routing_policies={
-            "ultraep": UltraEPL2Router(manager=transfer.manager),
+            "ultraep": UltraEPL2Router(),
         },
         l3_policy=placement_policy,
     )
@@ -109,14 +110,19 @@ def main() -> None:
         .contiguous()
     )
     topk_weights = torch.ones_like(logical_topk, dtype=torch.float32)
-    placement = load_balancer.compute_placement(
-        L3Request(
-            layer_id=0,
-            logical_topk_ids=logical_topk,
-            topk_weights=topk_weights,
+    collected_loads = transfer.collect_topk_loads_async(logical_topk)
+    with torch.cuda.stream(transfer.communication_stream):
+        placement = load_balancer.compute_placement(
+            L3Request(
+                layer_id=0,
+                logical_topk_ids=logical_topk,
+                topk_weights=topk_weights,
+                logical_loads_per_rank=collected_loads.loads_per_rank,
+            )
         )
-    )
-    ready = transfer.apply_async(placement)
+        placement_ready = transfer.record_placement_ready(0)
+        weights_ready = transfer.apply_async(placement)
+    placement_ready.current_stream_wait()
     decision = load_balancer.route_tokens(
         RoutingRequest(
             layer_id=0,
@@ -126,7 +132,11 @@ def main() -> None:
             transient_placement=placement,
         )
     )
-    ready.current_stream_wait()
+    # Surrogate the work done by DeepEP normal dispatch while UltraEP's exact
+    # incoming-epoch guard and local materialization run on the copy stream.
+    dispatch_marker = torch.ones(1, dtype=torch.int32, device=device)
+    dist.all_reduce(dispatch_marker, group=group)
+    weights_ready.current_stream_wait()
     torch.cuda.synchronize()
 
     assigned = 0
@@ -171,10 +181,11 @@ def main() -> None:
     dist.barrier()
     if rank == 0:
         print(
-            "PASS: shared MLB/UltraEP manager, external placement transfer, "
+            "PASS: UltraEP NVSHMEM load collection/transfer, MLB placement/reroute, "
             f"local materialization, and L2 routing ({int(assigned_tensor)} rows checked)"
         )
     load_balancer.close()
+    transfer.close()
     dist.destroy_process_group()
 
 

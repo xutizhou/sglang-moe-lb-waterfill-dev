@@ -605,6 +605,8 @@ class ServerArgs:
     ep_num_redundant_experts: int = 0
     enable_ultraep: bool = False
     ultraep_num_redundant_experts_per_rank: int = 0
+    ultraep_placement_refresh_interval: int = 64
+    ultraep_placement_refresh_min_tokens: int = 512
     ep_dispatch_algorithm: Optional[Literal["static", "dynamic", "fake", "lp"]] = None
     init_expert_location: str = "trivial"
     enable_eplb: bool = False
@@ -3192,6 +3194,32 @@ class ServerArgs:
         if self.enable_ultraep:
             if self.ep_size <= 1:
                 raise ValueError("--enable-ultraep requires EP size greater than one.")
+            if envs.SGLANG_OPT_USE_DEEPGEMM_MEGA_MOE.get():
+                raise ValueError(
+                    "UltraEP currently does not support "
+                    "SGLANG_OPT_USE_DEEPGEMM_MEGA_MOE because MegaMoE owns "
+                    "separate transformed expert weights."
+                )
+            if self.enable_lora or self.lora_paths:
+                raise ValueError(
+                    "UltraEP currently does not support LoRA because transient "
+                    "expert replicas do not yet include per-expert LoRA weights."
+                )
+            if self.enable_memory_saver and not self.enable_weights_cpu_backup:
+                raise ValueError(
+                    "UltraEP with --enable-memory-saver requires "
+                    "--enable-weights-cpu-backup so registered expert storage "
+                    "is restored in place after a weights pause."
+                )
+            if self.moe_runner_backend in (
+                "flashinfer_trtllm",
+                "flashinfer_trtllm_routed",
+            ):
+                raise ValueError(
+                    "UltraEP currently does not support FlashInfer TRT-LLM MoE "
+                    "runners because transient replicas do not yet include "
+                    "their derived per-expert tensors."
+                )
             if self.moe_a2a_backend != "deepep":
                 raise ValueError(
                     "--enable-ultraep currently requires --moe-a2a-backend deepep."
@@ -3200,6 +3228,14 @@ class ServerArgs:
                 raise ValueError(
                     "--enable-ultraep requires "
                     "--ultraep-num-redundant-experts-per-rank > 0."
+                )
+            if self.ultraep_placement_refresh_interval <= 0:
+                raise ValueError(
+                    "--ultraep-placement-refresh-interval must be greater than zero."
+                )
+            if self.ultraep_placement_refresh_min_tokens <= 0:
+                raise ValueError(
+                    "--ultraep-placement-refresh-min-tokens must be greater than zero."
                 )
             if self.enable_eplb or self.ep_dispatch_algorithm is not None:
                 raise ValueError(
@@ -3214,9 +3250,13 @@ class ServerArgs:
                 raise ValueError(
                     "UltraEP currently requires DeepEP Waterfill to be disabled."
                 )
-            if self.expert_distribution_recorder_mode is not None:
+            if (
+                self.expert_distribution_recorder_mode is not None
+                or self.enable_expert_distribution_metrics
+            ):
                 raise ValueError(
-                    "UltraEP currently does not support SGLang expert recording."
+                    "UltraEP currently does not support SGLang expert recording "
+                    "or expert-distribution metrics."
                 )
             if self.moe_dp_size > 1:
                 raise ValueError(
@@ -3228,6 +3268,10 @@ class ServerArgs:
                 )
             if self.elastic_ep_backend is not None:
                 raise ValueError("UltraEP currently does not support elastic EP.")
+            if self.speculative_algorithm is not None:
+                raise ValueError(
+                    "UltraEP currently does not support speculative decoding."
+                )
 
             expected_redundant = (
                 self.ultraep_num_redundant_experts_per_rank * self.ep_size
@@ -3241,9 +3285,12 @@ class ServerArgs:
             self.disable_shared_experts_fusion = True
             self.enforce_shared_experts_fusion = False
             self.disable_cuda_graph = True
+            self.disable_piecewise_cuda_graph = True
             logger.warning(
-                "UltraEP L3 is enabled: committed EPLB/LPLB, expert recording, "
-                "DeepEP Waterfill, shared-expert fusion, and CUDA graph are disabled."
+                "UltraEP L3 is enabled: committed EPLB/LPLB, expert "
+                "recording/metrics, "
+                "DeepEP Waterfill, speculative decoding, shared-expert fusion, "
+                "and CUDA graph (including piecewise graph) are disabled."
             )
 
         if self.enable_eplb and (self.expert_distribution_recorder_mode is None):
@@ -3274,7 +3321,10 @@ class ServerArgs:
                     "lplb-impl or main once merged) into the active "
                     "environment."
                 ) from exc
-            if not self.enable_deepep_waterfill and not self.disable_shared_experts_fusion:
+            if (
+                not self.enable_deepep_waterfill
+                and not self.disable_shared_experts_fusion
+            ):
                 logger.warning(
                     "Shared-expert fusion is disabled for standalone LPLB; "
                     "enable Waterfill to route the fused shared expert through MLB."
@@ -5868,6 +5918,26 @@ class ServerArgs:
             type=int,
             default=ServerArgs.ultraep_num_redundant_experts_per_rank,
             help="Reserve this many transient UltraEP replica slots on each EP rank.",
+        )
+        parser.add_argument(
+            "--ultraep-placement-refresh-interval",
+            type=int,
+            default=ServerArgs.ultraep_placement_refresh_interval,
+            help=(
+                "Refresh UltraEP placement once per this many prefill or mixed "
+                "forwards; reuse the latest placement between refreshes."
+            ),
+        )
+        parser.add_argument(
+            "--ultraep-placement-refresh-min-tokens",
+            type=int,
+            default=ServerArgs.ultraep_placement_refresh_min_tokens,
+            help=(
+                "Defer a scheduled UltraEP placement refresh until a prefill or "
+                "mixed forward has at least this many non-padding tokens across "
+                "the synchronized load sample. The bootstrap placement is never "
+                "deferred."
+            ),
         )
         parser.add_argument(
             "--ep-dispatch-algorithm",

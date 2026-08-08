@@ -402,6 +402,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         self.remote_instance_transfer_engine = None
         self.remote_instance_transfer_engine_session_id = ""
         self.remote_instance_transfer_engine_weight_info = None
+        self.ultraep_expert_transfer = None
 
         self.msprobe_debugger = None
         if server_args.msprobe_dump_config is not None:
@@ -735,9 +736,9 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 # lora_manager.init_cuda_graph_batch_info().
                 self._init_lora_cuda_graph_moe_buffers()
 
-        # L1/L2 need the orchestrator before model loading, while L3 must see
-        # the final framework-owned expert tensors after all weight transforms.
-        self._prepare_moe_l3()
+        # MLB is created before model loading, while the UltraEP transfer must
+        # see the final framework-owned tensors after all weight transforms.
+        self._prepare_ultraep()
 
         # Enable batch invariant mode
         if server_args.enable_deterministic_inference:
@@ -1629,15 +1630,15 @@ class ModelRunner(ModelRunnerKVCacheMixin):
 
         return MoELoadBalancer(routing_policies=routing_policies)
 
-    def _prepare_moe_l3(self):
+    def _prepare_ultraep(self):
         if not self.server_args.enable_ultraep:
             return
         if self.moe_load_balancer is None:
             raise RuntimeError("UltraEP requires the ModelRunner MoELoadBalancer.")
 
-        from sglang.srt.eplb.moe_load_balancer_glue import register_ultraep_l3
+        from sglang.srt.eplb.moe_load_balancer_glue import attach_ultraep
 
-        num_layers = register_ultraep_l3(
+        num_layers, self.ultraep_expert_transfer = attach_ultraep(
             model=self.model,
             model_config=self.model_config,
             server_args=self.server_args,
@@ -1645,8 +1646,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         )
         log_info_on_rank0(
             logger,
-            "Registered UltraEP L3 placement and L2 routing on the existing "
-            "MoELoadBalancer for "
+            "Attached MLB UltraEP placement/routing and standalone UltraEP "
+            "communication for "
             f"{num_layers} MoE layers.",
         )
 
@@ -1787,6 +1788,20 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             "All ranks are marked as elastic_ep_rejoin."
         )
 
+    def _reject_ultraep_online_weight_update(
+        self,
+    ) -> Optional[Tuple[bool, str]]:
+        if not (
+            getattr(self.server_args, "enable_ultraep", False)
+            or self.ultraep_expert_transfer is not None
+        ):
+            return None
+        return (
+            False,
+            "Online weight updates are not supported with UltraEP because "
+            "registered expert storage must remain stable.",
+        )
+
     def update_weights_from_disk(
         self,
         model_path: str,
@@ -1795,6 +1810,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         recapture_cuda_graph: bool = False,
     ) -> tuple[bool, str]:
         """Update engine weights in-place from the disk."""
+        if rejection := self._reject_ultraep_online_weight_update():
+            return rejection
         logger.info(
             f"Update engine weights online from disk begin. "
             f"avail mem={get_available_gpu_memory(self.device, self.gpu_id, empty_cache=False):.2f} GB"
@@ -2035,6 +2052,9 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             shape: the shape of the parameter to be updated.
         """
 
+        if rejection := self._reject_ultraep_online_weight_update():
+            return rejection
+
         assert group_name in self._model_update_group, (
             f"Group {group_name} not in {list(self._model_update_group.keys())}. "
             "Please call `init_weights_update_group` first."
@@ -2112,6 +2132,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         named_tensors: List[Tuple[str, Union[torch.Tensor, "LocalSerializedTensor"]]],
         load_format: Optional[str] = None,
     ):
+        if rejection := self._reject_ultraep_online_weight_update():
+            return rejection
         monkey_patch_torch_reductions()
         if load_format == "flattened_bucket":
             # Handle flattened bucket format
@@ -3608,6 +3630,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
 
     def update_weights_from_ipc(self, recv_req):
         """Update weights from IPC for checkpoint-engine integration."""
+        if rejection := self._reject_ultraep_online_weight_update():
+            return rejection
         try:
             from sglang.srt.checkpoint_engine.checkpoint_engine_worker import (
                 SGLangCheckpointEngineWorkerExtensionImpl,

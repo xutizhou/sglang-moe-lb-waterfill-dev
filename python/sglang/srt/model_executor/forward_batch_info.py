@@ -519,7 +519,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
                 global_num_tokens = batch.global_num_tokens
                 global_num_tokens_for_logprob = batch.global_num_tokens_for_logprob
 
-            ret.original_global_num_tokens_cpu = batch.global_num_tokens
+            ret.original_global_num_tokens_cpu = list(batch.global_num_tokens)
             ret.global_num_tokens_cpu = global_num_tokens
             ret.global_num_tokens_gpu = torch.tensor(
                 global_num_tokens, dtype=torch.int64

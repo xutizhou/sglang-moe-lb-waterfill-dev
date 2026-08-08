@@ -250,9 +250,9 @@ Unlike periodic EPLB, UltraEP uses post-gating load to choose transient replicas
 and reroute the current layer.
 
 The initial inference integration targets DeepSeek-family models on SM90/SM100
-with DeepEP and NVSHMEM. Install the CUDA-matched NVSHMEM package, then build
-MLB inside the SGLang environment with `MLB_BUILD_ULTRAEP=1` and
-`--no-build-isolation`. For example, launch EP8 with two replica slots per rank:
+with DeepEP and NVSHMEM. Install MLB's placement algorithms and build the
+standalone UltraEP package against a CUDA-matched NVSHMEM installation. For
+example, launch EP8 with two replica slots per rank:
 
 ```bash
 python -m sglang.launch_server \
@@ -264,21 +264,29 @@ python -m sglang.launch_server \
 ```
 
 The initial implementation rejects concurrent EPLB/LPLB, non-trivial initial
-placement, DeepEP Waterfill, expert recording, PP, TBO, MoE data parallelism,
-and elastic EP.
-CUDA graph is disabled until mutable replica-weight capture is validated.
+placement, DeepEP Waterfill, expert recording/metrics, PP, TBO, MoE data
+parallelism, elastic EP, speculative decoding, LoRA, MegaMoE, and FlashInfer
+TRT-LLM MoE runners. Online weight-update APIs are also rejected because
+UltraEP registers stable expert-storage pointers for the lifetime of the server. CUDA graph,
+including piecewise graph, is disabled until mutable replica-weight capture is
+validated. Memory saver additionally requires `--enable-weights-cpu-backup` so
+paused expert storage is restored in place without invalidating those registered
+pointers or their contents.
 
 MLB returns one placement and reroutes logical TopK IDs against that same
-placement. One UltraEP manager is shared by MLB's L3 policy and SGLang's
-communication adapter. MLB's CUDA placement tensors pass directly to UltraEP;
-there is no host copy or Python P2P plan. UltraEP receives quantized weights and
-block scales into NVSHMEM symmetric buffers, then SGLang materializes them
-bitwise into its existing redundant-expert rows. The communication and local
-copy streams overlap expert dispatch; the compute stream waits only immediately
-before the expert GEMMs. Serving decode reuses the placement learned by the most
-recent prefill, so static inference weights are not moved again for every output
-token. There are no public transfer-plan or reroute-plan objects, and no second
-load balancer or algorithm-specific SGLang runtime.
+placement. MLB owns only the placement and rerouting algorithms. SGLang asks
+standalone UltraEP to fuse the local TopK histogram with an NVSHMEM load
+collection, passes that device-resident matrix to MLB L3, and then passes MLB's
+CUDA placement tensors back to UltraEP's transfer API. There is no host copy,
+framework process-group load collective, or Python P2P plan.
+UltraEP receives quantized weights and block scales into NVSHMEM symmetric
+buffers, then SGLang materializes them bitwise into its existing redundant-expert
+rows. The communication and local copy streams overlap expert dispatch; the
+compute stream waits only immediately before the expert GEMMs. Serving decode
+reuses the placement learned by the most recent prefill, so static inference
+weights are not moved again for every output token. There are no public
+transfer-plan or reroute-plan objects, and no second load balancer or
+algorithm-specific SGLang runtime.
 
 Quantized experts expose a non-owning replication tensor view through their
 quantization method. This view covers all per-expert state required by that
@@ -286,6 +294,13 @@ method; it does not allocate a second copy of the model weights. The current
 UltraEP adapter supports the expert weights and optional W13/W2 block scales;
 quantization methods with additional auxiliary expert tensors are rejected at
 startup rather than copied incompletely.
+
+The standalone UltraEP manager is process-lifetime state in the current server
+integration. Its `close()` operation contains an EP collective, so it must not
+run from a per-process destructor or `atexit` handler. Controlled distributed
+tests call it on every EP rank before destroying the process group; the serving
+path relies on SGLang's existing whole-process shutdown until SGLang provides a
+rank-coordinated resource-teardown hook.
 
 
 ## EP with Spectulative Decoding

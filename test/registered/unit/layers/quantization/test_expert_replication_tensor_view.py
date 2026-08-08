@@ -32,6 +32,7 @@ def test_replication_view_uses_quant_semantics_without_copying_tensors():
             w2_weight=w2,
             w13_scale=s13,
             w2_scale=s2,
+            a2_scale=torch.tensor(1.0),
         )
     )
     layer = SimpleNamespace(
@@ -53,10 +54,12 @@ def test_replication_view_uses_quant_semantics_without_copying_tensors():
 
 def test_replication_view_reports_unsupported_per_expert_state():
     zero_points = torch.zeros((2, 1))
+    activation_scales = torch.ones((2, 1))
     method = _SemanticQuantMethod(
         SimpleNamespace(
             w13_weight=torch.zeros((2, 4)),
             w2_weight=torch.zeros((2, 4)),
+            a13_scale=activation_scales,
             w13_zp=zero_points,
         )
     )
@@ -65,7 +68,10 @@ def test_replication_view_reports_unsupported_per_expert_state():
         SimpleNamespace(num_local_experts=2)
     )
 
-    assert view.auxiliary_tensors == (("w13_zp", zero_points),)
+    assert view.auxiliary_tensors == (
+        ("a13_scale", activation_scales),
+        ("w13_zp", zero_points),
+    )
 
 
 def test_replication_view_does_not_drop_unmodeled_side_tensors():
