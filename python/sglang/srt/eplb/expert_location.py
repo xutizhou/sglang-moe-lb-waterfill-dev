@@ -589,6 +589,31 @@ def compute_initial_expert_location_metadata(
     moe_ep_rank: int,
     moe_load_balancer=None,
 ) -> Optional[ExpertLocationMetadata]:
+    if server_args.moe_balance_policy == "ultraep":
+        from moe_load_balancer.policies.l3 import (
+            build_ultraep_initial_physical_to_logical_map,
+        )
+
+        common = ExpertLocationMetadata._init_common(server_args, model_config)
+        if common is None:
+            return None
+        model_location = common["model_config_for_expert_location"]
+        mapping = build_ultraep_initial_physical_to_logical_map(
+            num_layers=model_location.num_layers,
+            num_logical_experts=model_location.num_logical_experts,
+            ep_size=common["ep_size"],
+            num_redundant_experts_per_rank=(
+                server_args.ep_num_redundant_experts // common["ep_size"]
+            ),
+            device=server_args.device,
+        )
+        return ExpertLocationMetadata.init_by_mapping(
+            server_args,
+            model_config,
+            physical_to_logical_map=mapping,
+            moe_ep_rank=moe_ep_rank,
+        )
+
     data = server_args.init_expert_location
     if data == "trivial":
         return ExpertLocationMetadata.init_trivial(

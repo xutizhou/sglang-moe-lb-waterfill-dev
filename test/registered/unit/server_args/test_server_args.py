@@ -86,6 +86,93 @@ class TestLoadBalanceMethod(unittest.TestCase):
         self.assertIn("'fake'", str(context.exception))
 
 
+class TestRuntimeMoEBalanceArgs(unittest.TestCase):
+    def test_policy_uses_separate_transfer_backend_setting(self):
+        args = ServerArgs(
+            model_path="dummy",
+            tp_size=8,
+            ep_size=8,
+            moe_a2a_backend="deepep",
+            ep_num_redundant_experts=16,
+            moe_balance_policy="ultraep",
+            expert_transfer_backend="ultraep",
+        )
+        args._handle_eplb_and_dispatch()
+        self.assertEqual(args.ep_dispatch_algorithm, "mlb")
+        self.assertEqual(args.moe_balance_policy, "ultraep")
+        self.assertEqual(args.expert_transfer_backend, "ultraep")
+        self.assertEqual(args.moe_balance_refresh_interval, 64)
+        self.assertEqual(args.moe_balance_refresh_min_tokens, 512)
+
+    def test_policy_requires_transfer_backend(self):
+        args = ServerArgs(
+            model_path="dummy",
+            tp_size=8,
+            ep_size=8,
+            moe_a2a_backend="deepep",
+            ep_num_redundant_experts=16,
+            moe_balance_policy="ultraep",
+        )
+        with self.assertRaisesRegex(ValueError, "expert transfer backend"):
+            args._handle_eplb_and_dispatch()
+
+    def test_runtime_and_periodic_balancing_are_mutually_exclusive(self):
+        args = ServerArgs(
+            model_path="dummy",
+            tp_size=8,
+            ep_size=8,
+            moe_a2a_backend="deepep",
+            ep_num_redundant_experts=16,
+            moe_balance_policy="ultraep",
+            expert_transfer_backend="ultraep",
+            enable_eplb=True,
+        )
+        with self.assertRaisesRegex(ValueError, "periodic EPLB"):
+            args._handle_eplb_and_dispatch()
+
+    def test_policy_rejects_speculative_decoding(self):
+        args = ServerArgs(
+            model_path="dummy",
+            tp_size=8,
+            ep_size=8,
+            moe_a2a_backend="deepep",
+            ep_num_redundant_experts=16,
+            moe_balance_policy="ultraep",
+            expert_transfer_backend="ultraep",
+            speculative_algorithm="NEXTN",
+        )
+        with self.assertRaisesRegex(ValueError, "speculative decoding"):
+            args._handle_eplb_and_dispatch()
+
+    def test_policy_rejects_nonpositive_refresh_interval(self):
+        args = ServerArgs(
+            model_path="dummy",
+            tp_size=8,
+            ep_size=8,
+            moe_a2a_backend="deepep",
+            ep_num_redundant_experts=16,
+            moe_balance_policy="ultraep",
+            moe_balance_refresh_interval=0,
+            expert_transfer_backend="ultraep",
+        )
+        with self.assertRaisesRegex(ValueError, "refresh interval"):
+            args._handle_eplb_and_dispatch()
+
+    def test_policy_rejects_nonpositive_refresh_min_tokens(self):
+        args = ServerArgs(
+            model_path="dummy",
+            tp_size=8,
+            ep_size=8,
+            moe_a2a_backend="deepep",
+            ep_num_redundant_experts=16,
+            moe_balance_policy="ultraep",
+            moe_balance_refresh_min_tokens=0,
+            expert_transfer_backend="ultraep",
+        )
+        with self.assertRaisesRegex(ValueError, "minimum tokens"):
+            args._handle_eplb_and_dispatch()
+
+
 class TestPortArgs(unittest.TestCase):
     @patch("sglang.srt.server_args.get_free_port")
     @patch("sglang.srt.server_args.tempfile.NamedTemporaryFile")

@@ -270,6 +270,8 @@ class FusedMoE(torch.nn.Module):
 
         self.quant_method: Optional[FusedMoEMethodBase] = None
         server_args = get_global_server_args()
+        self.expert_transfer_enabled = server_args.expert_transfer_backend != "none"
+        self._expert_transfer_event = None
         kt_config = create_kt_config_from_server_args(server_args, layer_id)
         if kt_config is not None:
             if quant_config is not None:
@@ -1081,6 +1083,9 @@ class FusedMoE(torch.nn.Module):
         origin_hidden_states_dim = hidden_states.shape[-1]
         assert self.quant_method is not None
 
+        if self.expert_transfer_enabled:
+            self.start_expert_transfer()
+
         dispatch_output = self.dispatcher.dispatch(
             hidden_states=hidden_states, topk_output=topk_output
         )
@@ -1105,11 +1110,21 @@ class FusedMoE(torch.nn.Module):
         return final_hidden_states
 
     def run_moe_core(self, dispatch_output: DispatchOutput) -> CombineInput:
+        if self.expert_transfer_enabled:
+            from sglang.srt.expert_transfer import finish_expert_transfer
+
+            finish_expert_transfer(self.layer_id, self._expert_transfer_event)
+            self._expert_transfer_event = None
         # TODO: consider using symmetric memory
         return self.quant_method.apply(
             layer=self,
             dispatch_output=dispatch_output,
         )
+
+    def start_expert_transfer(self) -> None:
+        from sglang.srt.expert_transfer import start_expert_transfer
+
+        self._expert_transfer_event = start_expert_transfer(self.layer_id, self)
 
     @classmethod
     def make_expert_params_mapping(

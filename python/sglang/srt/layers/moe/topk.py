@@ -356,6 +356,16 @@ class TopK(MultiPlatformOp):
             ),
         )
 
+    def route_empty(self, topk_output: TopKOutput, forward_batch=None) -> TopKOutput:
+        return self._apply_moe_load_balancer(
+            topk_output,
+            0,
+            num_token_non_padded=getattr(
+                forward_batch, "num_token_non_padded", None
+            ),
+            forward_batch=forward_batch,
+        )
+
     def forward_native(
         self,
         hidden_states: torch.Tensor,

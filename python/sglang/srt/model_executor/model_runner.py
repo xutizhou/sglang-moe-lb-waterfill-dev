@@ -1450,6 +1450,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 device_config=DeviceConfig(self.device, self.gpu_id),
             )
             self._prepare_moe_topk()
+            self._prepare_expert_transfer()
             if hasattr(self.loader, "remote_instance_transfer_engine_weight_info"):
                 self.remote_instance_transfer_engine_weight_info = (
                     self.loader.remote_instance_transfer_engine_weight_info
@@ -1590,6 +1591,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         needs_mlb = (
             server_args.enable_eplb
             or server_args.ep_dispatch_algorithm == "lp"
+            or server_args.moe_balance_policy is not None
             or server_args.enable_deepep_waterfill
             or server_args.init_expert_location != "trivial"
         )
@@ -1622,11 +1624,43 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 world_size=self.moe_ep_size,
             )
 
+        if server_args.moe_balance_policy == "ultraep":
+            from moe_load_balancer.policies.l2.ultraep import UltraEPL2Router
+
+            routing_policies["ultraep"] = UltraEPL2Router()
+
         return MoELoadBalancer(routing_policies=routing_policies)
+
+    def _prepare_expert_transfer(self):
+        self.expert_transfer = None
+        if self.server_args.expert_transfer_backend == "none":
+            return
+        if self.server_args.expert_transfer_backend != "ultraep":
+            raise ValueError(
+                f"Unknown expert transfer backend "
+                f"{self.server_args.expert_transfer_backend!r}."
+            )
+
+        from sglang.srt.expert_transfer import set_expert_transfer
+        from sglang.srt.expert_transfer.ultraep import UltraEPExpertTransfer
+
+        placement = get_global_expert_location_metadata()
+        if placement is None:
+            raise RuntimeError("Expert transfer requires expert placement metadata.")
+        self.expert_transfer = UltraEPExpertTransfer(
+            num_layers=placement.num_layers,
+            num_logical_experts=placement.num_logical_experts,
+            num_redundant_per_rank=(
+                placement.num_local_physical_experts
+                - placement.num_logical_experts // placement.ep_size
+            ),
+        )
+        set_expert_transfer(self.expert_transfer)
 
     def _prepare_moe_topk(self):
         enable_l2 = (
             self.server_args.ep_dispatch_algorithm == "lp"
+            or self.server_args.ep_dispatch_algorithm == "mlb"
             or self.server_args.enable_deepep_waterfill
         )
         if not enable_l2:

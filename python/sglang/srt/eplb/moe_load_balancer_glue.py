@@ -9,6 +9,7 @@ import torch
 from moe_load_balancer import RoutingPolicyConfig
 from moe_load_balancer.adapters.sglang import (
     count_logical_experts,
+    to_placement_request,
     to_placement_snapshot,
     to_routing_request,
     to_sglang_routing_output,
@@ -57,8 +58,14 @@ def route_topk_with_mlb(
         raise RuntimeError("MLB L2 routing requires committed expert metadata.")
 
     enable_lplb = server_args.ep_dispatch_algorithm == "lp"
+    enable_runtime_balance = server_args.moe_balance_policy is not None
     enable_waterfill = server_args.enable_deepep_waterfill
+    runtime_fast_path = (
+        enable_runtime_balance and not enable_lplb and not enable_waterfill
+    )
+    stage = _stage_from_forward_batch(forward_batch)
     policies = []
+    snapshot = None
     global_logical_count = None
     routed_rank_load = None
     active_rank_token_count = None
@@ -69,6 +76,76 @@ def route_topk_with_mlb(
             metadata.num_logical_experts,
         )
         policies.append(RoutingPolicyConfig(name="lplb"))
+
+    if enable_runtime_balance:
+        from sglang.srt.eplb.expert_placement_state import (
+            get_global_expert_placement_state,
+        )
+        from sglang.srt.expert_transfer import get_expert_transfer
+
+        transfer = get_expert_transfer()
+        if transfer is None:
+            raise RuntimeError("MoE runtime balancing requires an expert transfer.")
+        placement_state = get_global_expert_placement_state()
+        if placement_state.should_refresh(
+            layer_id,
+            stage,
+            server_args.moe_balance_refresh_interval,
+            _representative_token_count(forward_batch, num_tokens)
+            >= server_args.moe_balance_refresh_min_tokens,
+        ):
+            per_rank_count = _per_rank_logical_count(
+                topk_output.topk_ids,
+                metadata.num_logical_experts,
+                transfer,
+            )
+            placement_request = to_placement_request(
+                logical_count=per_rank_count[:, None, :],
+                num_physical_experts=metadata.num_physical_experts,
+                num_local_physical_experts=metadata.num_local_physical_experts,
+                num_groups=None,
+                num_nodes=server_args.nnodes,
+                algorithm=server_args.moe_balance_policy,
+                policy_metadata={
+                    "rank": get_moe_ep_group().rank_in_group,
+                    "num_nvl_ranks": transfer.nvl_domain_size,
+                },
+            )
+            plan = moe_load_balancer.plan_placement(placement_request)
+            snapshot = placement_state.stage(
+                layer_id,
+                plan,
+                metadata,
+            )
+            moe_load_balancer.prepare_routing_layer(
+                server_args.moe_balance_policy,
+                snapshot,
+            )
+        elif runtime_fast_path and placement_state.has_active(layer_id):
+            pass
+        else:
+            snapshot = placement_state.active_snapshot(layer_id, metadata)
+            if snapshot is None:
+                snapshot = to_placement_snapshot(metadata, layer_id)
+            moe_load_balancer.prepare_routing_layer(
+                server_args.moe_balance_policy,
+                snapshot,
+            )
+        if runtime_fast_path:
+            physical_ids = moe_load_balancer.route_prepared_tokens(
+                server_args.moe_balance_policy,
+                layer_id,
+                topk_output.topk_ids,
+            )
+            get_global_expert_distribution_recorder().on_select_experts(
+                topk_ids=physical_ids
+            )
+            return StandardTopKOutput(
+                topk_weights=topk_output.topk_weights,
+                topk_ids=physical_ids,
+                router_logits=topk_output.router_logits,
+            )
+        policies.append(RoutingPolicyConfig(name=server_args.moe_balance_policy))
 
     if enable_waterfill:
         policies.append(
@@ -95,15 +172,17 @@ def route_topk_with_mlb(
                 ),
             )
 
-    snapshot = to_placement_snapshot(metadata, layer_id)
-    stage = _stage_from_forward_batch(forward_batch)
+    if not enable_runtime_balance:
+        snapshot = to_placement_snapshot(metadata, layer_id)
     request = to_routing_request(
         layer_id=layer_id,
         logical_topk_ids=topk_output.topk_ids,
         topk_weights=topk_output.topk_weights,
         policies=policies,
         placement=snapshot,
-        routed_physical_topk_ids=(None if enable_lplb else topk_output.topk_ids),
+        routed_physical_topk_ids=(
+            None if enable_lplb or enable_runtime_balance else topk_output.topk_ids
+        ),
         stage=stage,
         routed_rank_load=routed_rank_load,
         active_rank_token_count=active_rank_token_count,
@@ -136,6 +215,25 @@ def _global_logical_count(
 ) -> torch.Tensor:
     local_count = count_logical_experts(logical_topk_ids, num_logical_experts)
     return get_moe_ep_group().all_reduce(local_count)
+
+
+def _per_rank_logical_count(
+    logical_topk_ids: torch.Tensor,
+    num_logical_experts: int,
+    transfer=None,
+) -> torch.Tensor:
+    local_count = count_logical_experts(
+        logical_topk_ids,
+        num_logical_experts,
+        dtype=torch.int32,
+    )
+    gather_loads = getattr(transfer, "all_gather_loads", None)
+    if gather_loads is not None:
+        gathered = gather_loads(local_count)
+        if gathered is not None:
+            return gathered
+    gathered = get_moe_ep_group().all_gather(local_count, dim=0)
+    return gathered.reshape(get_moe_ep_group().world_size, num_logical_experts)
 
 
 def _count_physical_per_rank(
@@ -178,3 +276,13 @@ def _stage_from_forward_batch(forward_batch) -> Optional[str]:
         return None
     name = getattr(forward_mode, "name", None) or str(forward_mode).upper()
     return _FORWARD_MODE_TO_STAGE.get(name)
+
+
+def _representative_token_count(forward_batch, fallback: int) -> int:
+    if forward_batch is None:
+        return fallback
+    global_counts = getattr(forward_batch, "original_global_num_tokens_cpu", None)
+    if global_counts:
+        return sum(global_counts)
+    local_count = getattr(forward_batch, "num_token_non_padded_cpu", None)
+    return fallback if local_count is None else int(local_count)

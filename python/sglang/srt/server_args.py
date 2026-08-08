@@ -603,7 +603,13 @@ class ServerArgs:
     enable_aiter_allreduce_fusion: bool = False
     deepep_mode: Literal["auto", "normal", "low_latency"] = "auto"
     ep_num_redundant_experts: int = 0
-    ep_dispatch_algorithm: Optional[Literal["static", "dynamic", "fake", "lp"]] = None
+    ep_dispatch_algorithm: Optional[
+        Literal["static", "dynamic", "fake", "lp", "mlb"]
+    ] = None
+    moe_balance_policy: Optional[str] = None
+    moe_balance_refresh_interval: int = 64
+    moe_balance_refresh_min_tokens: int = 512
+    expert_transfer_backend: Literal["none", "ultraep"] = "none"
     init_expert_location: str = "trivial"
     enable_eplb: bool = False
     eplb_algorithm: str = "auto"
@@ -3187,6 +3193,54 @@ class ServerArgs:
                 ) <= envs.SGLANG_MORI_NUM_MAX_DISPATCH_TOKENS_PER_RANK.get(), "SGLANG_MORI_NUM_MAX_DISPATCH_TOKENS_PER_RANK (default 4096) must be larger or equal to chunked_prefill_size"
 
     def _handle_eplb_and_dispatch(self):
+        if (
+            self.expert_transfer_backend != "none"
+            and self.moe_balance_policy is None
+        ):
+            raise ValueError(
+                "An expert transfer backend requires a runtime MoE balance policy."
+            )
+        if self.moe_balance_policy is not None:
+            if self.moe_balance_policy != "ultraep":
+                raise ValueError(
+                    f"Unsupported MoE balance policy {self.moe_balance_policy!r}."
+                )
+            if self.ep_size <= 1:
+                raise ValueError("MoE runtime balancing requires EP size greater than one.")
+            if self.ep_num_redundant_experts <= 0:
+                raise ValueError("MoE runtime balancing requires redundant experts.")
+            if self.ep_num_redundant_experts % self.ep_size != 0:
+                raise ValueError("Redundant experts must be divisible by EP size.")
+            if self.moe_balance_refresh_interval <= 0:
+                raise ValueError("MoE balance refresh interval must be positive.")
+            if self.moe_balance_refresh_min_tokens <= 0:
+                raise ValueError("MoE balance refresh minimum tokens must be positive.")
+            if self.moe_a2a_backend != "deepep":
+                raise ValueError("MoE runtime balancing currently requires DeepEP.")
+            if self.enable_eplb:
+                raise ValueError(
+                    "Runtime MoE balancing cannot be combined with periodic EPLB."
+                )
+            if self.enable_two_batch_overlap or self.enable_single_batch_overlap:
+                raise ValueError(
+                    "Runtime MoE balancing does not yet support batch overlap."
+                )
+            if self.speculative_algorithm is not None:
+                raise ValueError(
+                    "Runtime MoE balancing does not yet support speculative decoding."
+                )
+            if self.expert_transfer_backend == "none":
+                raise ValueError("MoE runtime balancing requires an expert transfer backend.")
+            if self.ep_dispatch_algorithm not in (None, "mlb"):
+                raise ValueError("MoE runtime balancing requires MLB physical routing.")
+            self.ep_dispatch_algorithm = "mlb"
+            if not self.disable_cuda_graph:
+                logger.warning(
+                    "CUDA graph is disabled for runtime MoE placement and transfer."
+                )
+                self.disable_cuda_graph = True
+            self.disable_shared_experts_fusion = True
+
         if self.enable_eplb and (self.expert_distribution_recorder_mode is None):
             self.expert_distribution_recorder_mode = "stat"
             logger.warning(
@@ -3204,12 +3258,12 @@ class ServerArgs:
         # LPLB ("lp") is routed through the moe_load_balancer SDK rather than
         # a native SGLang solver class. Fail fast at startup if it isn't
         # importable so the failure surfaces before the first forward pass.
-        if self.ep_dispatch_algorithm == "lp":
+        if self.ep_dispatch_algorithm in ("lp", "mlb"):
             try:
                 import moe_load_balancer  # noqa: F401
             except ImportError as exc:
                 raise RuntimeError(
-                    "--ep-dispatch-algorithm=lp requires the moe_load_balancer "
+                    "MLB expert routing requires the moe_load_balancer "
                     "package. Install it from "
                     "https://github.com/xutizhou/moe_load_balancer (branch "
                     "lplb-impl or main once merged) into the active "
@@ -5803,6 +5857,30 @@ class ServerArgs:
             type=str,
             default=ServerArgs.ep_dispatch_algorithm,
             help="The algorithm to choose ranks for redundant experts in expert parallel.",
+        )
+        parser.add_argument(
+            "--moe-balance-policy",
+            choices=["ultraep"],
+            default=ServerArgs.moe_balance_policy,
+            help="Run a runtime expert placement and routing policy from MLB.",
+        )
+        parser.add_argument(
+            "--moe-balance-refresh-interval",
+            type=int,
+            default=ServerArgs.moe_balance_refresh_interval,
+            help="Refresh runtime expert placement every N representative prefill batches.",
+        )
+        parser.add_argument(
+            "--moe-balance-refresh-min-tokens",
+            type=int,
+            default=ServerArgs.moe_balance_refresh_min_tokens,
+            help="Defer scheduled placement refreshes until a batch has N real tokens.",
+        )
+        parser.add_argument(
+            "--expert-transfer-backend",
+            choices=["none", "ultraep"],
+            default=ServerArgs.expert_transfer_backend,
+            help="Backend used by SGLang to transfer replica expert weights.",
         )
         parser.add_argument(
             "--init-expert-location",

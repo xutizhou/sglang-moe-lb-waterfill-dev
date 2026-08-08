@@ -962,6 +962,7 @@ class DeepseekV2MoE(nn.Module):
             )
         else:
             topk_output = self.topk.empty_topk_output(hidden_states.device)
+            topk_output = self.topk.route_empty(topk_output, forward_batch)
             if (
                 is_deepep_class_backend()
                 and self.num_fused_shared_experts > 0
@@ -1201,9 +1202,15 @@ class DeepseekV2MoE(nn.Module):
                 )
         else:
             state.topk_output = self.topk.empty_topk_output(hidden_states.device)
+            state.topk_output = self.topk.route_empty(
+                state.topk_output,
+                state.forward_batch,
+            )
 
     def op_dispatch_a(self, state):
         if self.ep_size > 1:
+            if self.experts.expert_transfer_enabled:
+                self.experts.start_expert_transfer()
             self.experts.dispatcher.dispatch_a(
                 hidden_states=state.hidden_states_mlp_input,
                 topk_output=state.pop("topk_output"),
