@@ -57,6 +57,7 @@ def route_topk_with_mlb(
         raise RuntimeError("MLB L2 routing requires committed expert metadata.")
 
     enable_lplb = server_args.ep_dispatch_algorithm == "lp"
+    enable_ultraep = server_args.ep_dispatch_algorithm == "ultraep"
     enable_waterfill = server_args.enable_deepep_waterfill
     policies = []
     global_logical_count = None
@@ -69,6 +70,9 @@ def route_topk_with_mlb(
             metadata.num_logical_experts,
         )
         policies.append(RoutingPolicyConfig(name="lplb"))
+
+    if enable_ultraep:
+        policies.append(RoutingPolicyConfig(name="ultraep"))
 
     if enable_waterfill:
         policies.append(
@@ -103,7 +107,9 @@ def route_topk_with_mlb(
         topk_weights=topk_output.topk_weights,
         policies=policies,
         placement=snapshot,
-        routed_physical_topk_ids=(None if enable_lplb else topk_output.topk_ids),
+        routed_physical_topk_ids=(
+            None if enable_lplb or enable_ultraep else topk_output.topk_ids
+        ),
         stage=stage,
         routed_rank_load=routed_rank_load,
         active_rank_token_count=active_rank_token_count,

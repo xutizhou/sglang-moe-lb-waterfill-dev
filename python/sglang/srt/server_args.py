@@ -603,7 +603,9 @@ class ServerArgs:
     enable_aiter_allreduce_fusion: bool = False
     deepep_mode: Literal["auto", "normal", "low_latency"] = "auto"
     ep_num_redundant_experts: int = 0
-    ep_dispatch_algorithm: Optional[Literal["static", "dynamic", "fake", "lp"]] = None
+    ep_dispatch_algorithm: Optional[
+        Literal["static", "dynamic", "fake", "lp", "ultraep"]
+    ] = None
     init_expert_location: str = "trivial"
     enable_eplb: bool = False
     eplb_algorithm: str = "auto"
@@ -3187,6 +3189,26 @@ class ServerArgs:
                 ) <= envs.SGLANG_MORI_NUM_MAX_DISPATCH_TOKENS_PER_RANK.get(), "SGLANG_MORI_NUM_MAX_DISPATCH_TOKENS_PER_RANK (default 4096) must be larger or equal to chunked_prefill_size"
 
     def _handle_eplb_and_dispatch(self):
+        if self.eplb_algorithm == "ultraep":
+            if not self.enable_eplb:
+                raise ValueError("UltraEP requires --enable-eplb.")
+            if self.ep_size <= 1:
+                raise ValueError("UltraEP requires EP size greater than one.")
+            if self.moe_a2a_backend != "deepep":
+                raise ValueError("UltraEP requires --moe-a2a-backend deepep.")
+            if self.ep_num_redundant_experts <= 0:
+                raise ValueError("UltraEP requires redundant experts.")
+            if self.ep_num_redundant_experts % self.ep_size != 0:
+                raise ValueError("UltraEP requires equal redundant slots per EP rank.")
+            if self.eplb_rebalance_layers_per_chunk is not None:
+                raise ValueError("UltraEP currently updates all MoE layers together.")
+            if self.elastic_ep_backend is not None:
+                raise ValueError("UltraEP does not support elastic EP.")
+            if self.ep_dispatch_algorithm not in (None, "ultraep"):
+                raise ValueError("UltraEP requires --ep-dispatch-algorithm ultraep.")
+            self.ep_dispatch_algorithm = "ultraep"
+            self.disable_shared_experts_fusion = True
+
         if self.enable_eplb and (self.expert_distribution_recorder_mode is None):
             self.expert_distribution_recorder_mode = "stat"
             logger.warning(

@@ -37,6 +37,10 @@ _LOG_INPUT = get_bool_env_var("SGLANG_EXPERT_LOCATION_UPDATER_LOG_INPUT")
 class ExpertLocationUpdater:
     def __init__(self):
         self._first_execution = True
+        self._transfer_backend = None
+
+    def set_transfer_backend(self, backend) -> None:
+        self._transfer_backend = backend
 
     def update(
         self,
@@ -59,14 +63,20 @@ class ExpertLocationUpdater:
         old_expert_location_metadata = get_global_expert_location_metadata()
         assert old_expert_location_metadata is not None
 
-        missing_logical_experts_by_layers = _update_expert_weights(
-            routed_experts_weights_of_layer=routed_experts_weights_of_layer,
-            old_expert_location_metadata=old_expert_location_metadata,
-            new_expert_location_metadata=new_expert_location_metadata,
-            update_layer_ids=update_layer_ids,
-            nnodes=nnodes,
-            rank=rank,
-        )
+        if self._transfer_backend is None:
+            missing_logical_experts_by_layers = _update_expert_weights(
+                routed_experts_weights_of_layer=routed_experts_weights_of_layer,
+                old_expert_location_metadata=old_expert_location_metadata,
+                new_expert_location_metadata=new_expert_location_metadata,
+                update_layer_ids=update_layer_ids,
+                nnodes=nnodes,
+                rank=rank,
+            )
+        else:
+            missing_logical_experts_by_layers = self._transfer_backend.update(
+                new_expert_location_metadata,
+                update_layer_ids,
+            )
         old_expert_location_metadata.update(
             new_expert_location_metadata,
             update_layer_ids=update_layer_ids,

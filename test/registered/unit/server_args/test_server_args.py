@@ -35,6 +35,33 @@ class TestPrepareServerArgs(CustomTestCase):
 
 
 class TestLoadBalanceMethod(unittest.TestCase):
+    def test_ultraep_reuses_eplb_arguments(self):
+        server_args = ServerArgs(
+            model_path="dummy",
+            tp_size=8,
+            ep_size=8,
+            enable_eplb=True,
+            eplb_algorithm="ultraep",
+            moe_a2a_backend="deepep",
+            ep_num_redundant_experts=16,
+        )
+        server_args._handle_eplb_and_dispatch()
+        self.assertEqual(server_args.ep_dispatch_algorithm, "ultraep")
+        self.assertTrue(server_args.disable_shared_experts_fusion)
+
+    def test_ultraep_requires_rank_local_replica_slots(self):
+        with self.assertRaisesRegex(ValueError, "equal redundant slots"):
+            server_args = ServerArgs(
+                model_path="dummy",
+                tp_size=8,
+                ep_size=8,
+                enable_eplb=True,
+                eplb_algorithm="ultraep",
+                moe_a2a_backend="deepep",
+                ep_num_redundant_experts=15,
+            )
+            server_args._handle_eplb_and_dispatch()
+
     def test_non_pd_defaults_to_round_robin(self):
         server_args = ServerArgs(model_path="dummy", disaggregation_mode="null")
         self.assertEqual(server_args.load_balance_method, "round_robin")

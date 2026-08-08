@@ -402,7 +402,6 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         self.remote_instance_transfer_engine = None
         self.remote_instance_transfer_engine_session_id = ""
         self.remote_instance_transfer_engine_weight_info = None
-
         self.msprobe_debugger = None
         if server_args.msprobe_dump_config is not None:
             self.init_msprobe()
@@ -723,6 +722,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         supports_torch_tp = getattr(self.model, "supports_torch_tp", False)
         if self.tp_size > 1 and supports_torch_tp:
             self.apply_torch_tp()
+
+        self._prepare_expert_transfer()
 
         # Init lora
         if server_args.enable_lora:
@@ -1622,11 +1623,33 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 world_size=self.moe_ep_size,
             )
 
+        if server_args.eplb_algorithm == "ultraep":
+            from moe_load_balancer.policies.l2.ultraep import UltraEPL2Router
+
+            routing_policies["ultraep"] = UltraEPL2Router()
+
         return MoELoadBalancer(routing_policies=routing_policies)
+
+    def _prepare_expert_transfer(self):
+        if self.server_args.eplb_algorithm != "ultraep":
+            return
+
+        from sglang.srt.eplb.ultraep_expert_transfer import UltraEPExpertTransfer
+
+        transfer_backend = UltraEPExpertTransfer(
+            self.model,
+            num_logical_experts=self.model_config.hf_config.n_routed_experts,
+            num_redundant_per_rank=(
+                self.server_args.ep_num_redundant_experts // self.moe_ep_size
+            ),
+        )
+        self.server_args._ultraep_num_nvl_ranks = transfer_backend.nvl_domain_size
+        self.expert_location_updater.set_transfer_backend(transfer_backend)
 
     def _prepare_moe_topk(self):
         enable_l2 = (
             self.server_args.ep_dispatch_algorithm == "lp"
+            or self.server_args.ep_dispatch_algorithm == "ultraep"
             or self.server_args.enable_deepep_waterfill
         )
         if not enable_l2:

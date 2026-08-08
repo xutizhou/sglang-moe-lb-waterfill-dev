@@ -23,7 +23,7 @@ from sglang.srt.server_args import get_global_server_args
 
 @dataclass
 class ExpertLocationDispatchInfo:
-    ep_dispatch_algorithm: Literal["static", "dynamic", "fake", "lp"]
+    ep_dispatch_algorithm: Literal["static", "dynamic", "fake", "lp", "ultraep"]
     # (num_logical_experts,)
     partial_logical_to_rank_dispatch_physical_map: Optional[torch.Tensor]
     # (num_logical_experts, X)
@@ -83,7 +83,7 @@ def topk_ids_logical_to_physical(
         return _topk_ids_logical_to_physical_static(topk_ids, info)
     if info.ep_dispatch_algorithm in ["dynamic", "fake"]:
         return _topk_ids_logical_to_physical_dynamic(topk_ids, info)
-    if info.ep_dispatch_algorithm == "lp":
+    if info.ep_dispatch_algorithm in ("lp", "ultraep"):
         # The unified MLB L2 hook runs after logical TopK selection.
         return topk_ids
     raise NotImplementedError(f"Unknown algorithm {info.ep_dispatch_algorithm}")

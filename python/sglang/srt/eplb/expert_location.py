@@ -41,6 +41,7 @@ class ExpertLocationMetadata:
     logical_to_all_physical_map_num_valid: torch.Tensor  # (layers, num_logical_experts)
     # (layers, num_logical_experts)
     logical_to_rank_dispatch_physical_map: Optional[torch.Tensor]
+    rank_quota_prefix: Optional[torch.Tensor] = None
 
     # -------------------------------- properties ------------------------------------
 
@@ -105,6 +106,34 @@ class ExpertLocationMetadata:
             server_args,
             model_config,
             physical_to_logical_map=physical_to_logical_map,
+            moe_ep_rank=moe_ep_rank,
+        )
+
+    @staticmethod
+    def init_ultraep(
+        server_args: ServerArgs, model_config: ModelConfig, moe_ep_rank: int
+    ):
+        from moe_load_balancer.policies.l3 import (
+            build_ultraep_initial_physical_to_logical_map,
+        )
+
+        common = ExpertLocationMetadata._init_common(server_args, model_config)
+        if common is None:
+            return None
+        model_location = common["model_config_for_expert_location"]
+        mapping = build_ultraep_initial_physical_to_logical_map(
+            num_layers=model_location.num_layers,
+            num_logical_experts=model_location.num_logical_experts,
+            ep_size=common["ep_size"],
+            num_redundant_experts_per_rank=(
+                server_args.ep_num_redundant_experts // common["ep_size"]
+            ),
+            device=server_args.device,
+        )
+        return ExpertLocationMetadata.init_by_mapping(
+            server_args,
+            model_config,
+            physical_to_logical_map=mapping,
             moe_ep_rank=moe_ep_rank,
         )
 
@@ -174,6 +203,14 @@ class ExpertLocationMetadata:
             num_nodes=server_args.nnodes,
             algorithm=server_args.eplb_algorithm,
             active_ranks=_mlb_eplb_active_ranks(server_args),
+            policy_metadata=(
+                {
+                    "rank": torch.distributed.get_rank() % common["ep_size"],
+                    "num_nvl_ranks": server_args._ultraep_num_nvl_ranks,
+                }
+                if server_args.eplb_algorithm == "ultraep"
+                else None
+            ),
         )
         plan = moe_load_balancer.plan_placement(request)
         maps = to_sglang_maps(plan)
@@ -181,12 +218,11 @@ class ExpertLocationMetadata:
         return ExpertLocationMetadata._init_raw(
             server_args=server_args,
             ep_size=common["ep_size"],
-            physical_to_logical_map=maps.physical_to_logical_map.to(
-                server_args.device
-            ),
+            physical_to_logical_map=maps.physical_to_logical_map.to(server_args.device),
             logical_to_all_physical_map=maps.logical_to_all_physical_map.to(
                 server_args.device
             ),
+            rank_quota_prefix=maps.metadata.get("rank_quota_prefix"),
         )
 
     @staticmethod
@@ -219,7 +255,11 @@ class ExpertLocationMetadata:
         ep_size: int,
         physical_to_logical_map: torch.Tensor,
         logical_to_all_physical_map: torch.Tensor,
+        rank_quota_prefix: Optional[torch.Tensor] = None,
     ):
+        if server_args.eplb_algorithm == "ultraep":
+            physical_to_logical_map = physical_to_logical_map.to(torch.int32)
+            logical_to_all_physical_map = logical_to_all_physical_map.to(torch.int32)
         _, num_physical_experts = physical_to_logical_map.shape
 
         logical_to_all_physical_map_padded = F.pad(
@@ -227,10 +267,19 @@ class ExpertLocationMetadata:
             (0, num_physical_experts - logical_to_all_physical_map.shape[-1]),
             value=-1,
         )
+        if rank_quota_prefix is not None:
+            rank_quota_prefix = F.pad(
+                rank_quota_prefix,
+                (0, num_physical_experts - rank_quota_prefix.shape[-1]),
+            )
 
         logical_to_all_physical_map_num_valid = torch.count_nonzero(
             logical_to_all_physical_map != -1, dim=-1
         )
+        if server_args.eplb_algorithm == "ultraep":
+            logical_to_all_physical_map_num_valid = (
+                logical_to_all_physical_map_num_valid.to(torch.int32)
+            )
 
         return ExpertLocationMetadata(
             physical_to_logical_map=physical_to_logical_map,
@@ -250,6 +299,7 @@ class ExpertLocationMetadata:
                 if server_args.ep_dispatch_algorithm == "static"
                 else None
             ),
+            rank_quota_prefix=rank_quota_prefix,
         )
 
     # -------------------------------- mutation ------------------------------------
@@ -282,6 +332,9 @@ class ExpertLocationMetadata:
                 mask_update = mask_update.view(*([-1] + [1] * (self_field.dim() - 1)))
                 mask_update = mask_update.to(self_field.device, non_blocking=True)
                 self_field[...] = torch.where(mask_update, other_field, self_field)
+
+        if other.rank_quota_prefix is not None:
+            self.rank_quota_prefix = other.rank_quota_prefix
 
     # -------------------------------- usage ------------------------------------
 
@@ -589,6 +642,10 @@ def compute_initial_expert_location_metadata(
     moe_ep_rank: int,
     moe_load_balancer=None,
 ) -> Optional[ExpertLocationMetadata]:
+    if server_args.eplb_algorithm == "ultraep":
+        return ExpertLocationMetadata.init_ultraep(
+            server_args, model_config, moe_ep_rank
+        )
     data = server_args.init_expert_location
     if data == "trivial":
         return ExpertLocationMetadata.init_trivial(
@@ -627,7 +684,6 @@ def compute_initial_expert_location_metadata(
         raise NotImplementedError(
             f"Unknown init_expert_location format ({list(data_dict.keys())=})"
         )
-
 
 
 def _mlb_eplb_active_ranks(server_args):
