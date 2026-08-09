@@ -231,6 +231,10 @@ class ExpertLocationMetadata:
         logical_to_all_physical_map_num_valid = torch.count_nonzero(
             logical_to_all_physical_map != -1, dim=-1
         )
+        pipeline = server_args.get_moe_load_balancer_pipeline()
+        requires_rank_dispatch_map = (
+            pipeline is not None and pipeline.capabilities.requires_rank_dispatch_map
+        )
 
         return ExpertLocationMetadata(
             physical_to_logical_map=physical_to_logical_map,
@@ -247,7 +251,7 @@ class ExpertLocationMetadata:
                     # TODO improve when we have real EP rank
                     ep_rank=torch.distributed.get_rank() % ep_size,
                 )
-                if server_args.ep_dispatch_algorithm == "static"
+                if requires_rank_dispatch_map
                 else None
             ),
         )
@@ -627,7 +631,6 @@ def compute_initial_expert_location_metadata(
         raise NotImplementedError(
             f"Unknown init_expert_location format ({list(data_dict.keys())=})"
         )
-
 
 
 def _mlb_eplb_active_ranks(server_args):

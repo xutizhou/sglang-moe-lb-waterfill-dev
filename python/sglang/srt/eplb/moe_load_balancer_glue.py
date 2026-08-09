@@ -6,7 +6,6 @@ from typing import Optional
 
 import torch
 
-from moe_load_balancer import RoutingPolicyConfig
 from moe_load_balancer.adapters.sglang import (
     count_logical_experts,
     to_placement_snapshot,
@@ -17,14 +16,12 @@ from sglang.srt.distributed import get_moe_ep_group
 from sglang.srt.distributed.communication_op import (
     moe_expert_parallel_all_reduce,
 )
-from sglang.srt.environ import envs
 from sglang.srt.eplb.expert_distribution import (
     get_global_expert_distribution_recorder,
 )
 from sglang.srt.eplb.expert_location import (
     get_global_expert_location_metadata,
 )
-from sglang.srt.server_args import get_global_server_args
 
 
 _FORWARD_MODE_TO_STAGE = {
@@ -51,49 +48,31 @@ def route_topk_with_mlb(
 
     from sglang.srt.layers.moe.topk import StandardTopKOutput
 
-    server_args = get_global_server_args()
     metadata = get_global_expert_location_metadata()
     if metadata is None:
         raise RuntimeError("MLB L2 routing requires committed expert metadata.")
 
-    enable_lplb = server_args.ep_dispatch_algorithm == "lp"
-    enable_waterfill = server_args.enable_deepep_waterfill
-    policies = []
+    capabilities = moe_load_balancer.routing_capabilities
     global_logical_count = None
     routed_rank_load = None
     active_rank_token_count = None
 
-    if enable_lplb:
+    if capabilities.requires_global_logical_count:
         global_logical_count = _global_logical_count(
             topk_output.topk_ids,
             metadata.num_logical_experts,
         )
-        policies.append(RoutingPolicyConfig(name="lplb"))
 
-    if enable_waterfill:
-        policies.append(
-            RoutingPolicyConfig(
-                name="waterfill",
-                metadata={
-                    "experts_per_rank": metadata.num_local_physical_experts,
-                    "world_size": metadata.ep_size,
-                },
-            )
+    if capabilities.requires_dynamic_rank_load:
+        local_rank_load = _count_physical_per_rank(
+            topk_output.topk_ids,
+            world_size=metadata.ep_size,
+            experts_per_rank=metadata.num_local_physical_experts,
         )
-        if not enable_lplb and envs.SGLANG_DISABLE_STATIC_WATERFILL.get():
-            local_rank_load = _count_physical_per_rank(
-                topk_output.topk_ids,
-                world_size=metadata.ep_size,
-                experts_per_rank=metadata.num_local_physical_experts,
-            )
-            routed_rank_load, active_rank_token_count = _dynamic_waterfill_load(
-                local_rank_load,
-                (
-                    num_token_non_padded
-                    if num_token_non_padded is not None
-                    else num_tokens
-                ),
-            )
+        routed_rank_load, active_rank_token_count = _dynamic_waterfill_load(
+            local_rank_load,
+            num_token_non_padded if num_token_non_padded is not None else num_tokens,
+        )
 
     snapshot = to_placement_snapshot(metadata, layer_id)
     stage = _stage_from_forward_batch(forward_batch)
@@ -101,9 +80,10 @@ def route_topk_with_mlb(
         layer_id=layer_id,
         logical_topk_ids=topk_output.topk_ids,
         topk_weights=topk_output.topk_weights,
-        policies=policies,
         placement=snapshot,
-        routed_physical_topk_ids=(None if enable_lplb else topk_output.topk_ids),
+        routed_physical_topk_ids=(
+            topk_output.topk_ids if capabilities.routes_replicas_inline else None
+        ),
         stage=stage,
         routed_rank_load=routed_rank_load,
         active_rank_token_count=active_rank_token_count,

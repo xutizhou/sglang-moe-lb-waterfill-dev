@@ -61,7 +61,7 @@ spec:
               - --page-size
               - "64"
     #          - --enable-eplb
-              - --ep-dispatch-algorithm
+              - --moe-load-balancer-algorithm
               - dynamic
               - --eplb-algorithm
               - deepseek

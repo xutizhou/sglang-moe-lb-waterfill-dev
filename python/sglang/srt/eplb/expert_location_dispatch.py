@@ -13,7 +13,7 @@
 # ==============================================================================
 
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Optional
 
 import torch
 
@@ -23,26 +23,26 @@ from sglang.srt.server_args import get_global_server_args
 
 @dataclass
 class ExpertLocationDispatchInfo:
-    ep_dispatch_algorithm: Literal["static", "dynamic", "fake", "lp"]
+    # Opaque MLB-selected inline policy. SGLang does not interpret this value.
+    replica_routing_policy: str
     # (num_logical_experts,)
     partial_logical_to_rank_dispatch_physical_map: Optional[torch.Tensor]
     # (num_logical_experts, X)
     partial_logical_to_all_physical_map: torch.Tensor
     # (num_logical_experts,)
     partial_logical_to_all_physical_map_num_valid: torch.Tensor
-    num_physical_experts: int
 
     @classmethod
     def init_new(cls, layer_id: int):
-        ep_dispatch_algorithm = get_global_server_args().ep_dispatch_algorithm
+        pipeline = get_global_server_args().get_moe_load_balancer_pipeline()
         expert_location_metadata = get_global_expert_location_metadata()
         assert expert_location_metadata is not None
 
-        if ep_dispatch_algorithm is None:
+        if pipeline is None or pipeline.capabilities.replica_policy is None:
             return None
 
         return cls(
-            ep_dispatch_algorithm=ep_dispatch_algorithm,
+            replica_routing_policy=pipeline.capabilities.replica_policy,
             partial_logical_to_rank_dispatch_physical_map=(
                 expert_location_metadata.logical_to_rank_dispatch_physical_map[
                     layer_id, :
@@ -57,7 +57,6 @@ class ExpertLocationDispatchInfo:
             partial_logical_to_all_physical_map_num_valid=expert_location_metadata.logical_to_all_physical_map_num_valid[
                 layer_id, :
             ],
-            num_physical_experts=expert_location_metadata.num_physical_experts,
         )
 
 
@@ -66,14 +65,13 @@ def transform_select_experts_inputs(
     correction_bias: Optional[torch.Tensor],
     info: Optional[ExpertLocationDispatchInfo],
 ):
-    if (info is not None) and (info.ep_dispatch_algorithm == "fake"):
+    if info is not None:
         from moe_load_balancer.policies.l2.replica import (
-            transform_fake_routing_inputs,
+            transform_replica_routing_inputs,
         )
 
-        router_logits, correction_bias = transform_fake_routing_inputs(
-            router_logits,
-            correction_bias,
+        router_logits, correction_bias = transform_replica_routing_inputs(
+            info.replica_routing_policy, router_logits, correction_bias
         )
     return router_logits, correction_bias
 
@@ -84,34 +82,12 @@ def topk_ids_logical_to_physical(
     if info is None:
         return topk_ids
 
-    if info.ep_dispatch_algorithm == "static":
-        return _topk_ids_logical_to_physical_static(topk_ids, info)
-    if info.ep_dispatch_algorithm in ["dynamic", "fake"]:
-        return _topk_ids_logical_to_physical_dynamic(topk_ids, info)
-    if info.ep_dispatch_algorithm == "lp":
-        # The unified MLB L2 hook runs after logical TopK selection.
-        return topk_ids
-    raise NotImplementedError(f"Unknown algorithm {info.ep_dispatch_algorithm}")
+    from moe_load_balancer.policies.l2.replica import route_replicas
 
-
-def _topk_ids_logical_to_physical_static(
-    topk_ids: torch.Tensor, info: Optional[ExpertLocationDispatchInfo]
-) -> torch.Tensor:
-    from moe_load_balancer.policies.l2.replica import route_static_replicas
-
-    return route_static_replicas(
+    return route_replicas(
+        info.replica_routing_policy,
         topk_ids,
-        info.partial_logical_to_rank_dispatch_physical_map,
-    )
-
-
-def _topk_ids_logical_to_physical_dynamic(
-    topk_ids: torch.Tensor, info: Optional[ExpertLocationDispatchInfo]
-) -> torch.Tensor:
-    from moe_load_balancer.policies.l2.replica import route_dynamic_replicas
-
-    return route_dynamic_replicas(
-        topk_ids,
-        info.partial_logical_to_all_physical_map,
-        info.partial_logical_to_all_physical_map_num_valid,
+        default_physical_for_logical=info.partial_logical_to_rank_dispatch_physical_map,
+        logical_to_physical_candidates=info.partial_logical_to_all_physical_map,
+        logical_to_physical_count=info.partial_logical_to_all_physical_map_num_valid,
     )

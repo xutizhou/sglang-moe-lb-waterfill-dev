@@ -86,6 +86,49 @@ class TestLoadBalanceMethod(unittest.TestCase):
         self.assertIn("'fake'", str(context.exception))
 
 
+class TestMoELoadBalancerAlgorithm(unittest.TestCase):
+    def test_one_parameter_selects_composed_pipeline(self):
+        server_args = ServerArgs(
+            model_path="dummy",
+            moe_load_balancer_algorithm="lplb+waterfill",
+        )
+
+        server_args._handle_moe_load_balancer()
+
+        self.assertEqual(
+            server_args.moe_load_balancer_algorithm,
+            "lplb+waterfill",
+        )
+        capabilities = server_args.get_moe_load_balancer_pipeline().capabilities
+        self.assertTrue(capabilities.requires_global_logical_count)
+        self.assertTrue(capabilities.routes_shared_expert)
+
+    def test_bare_waterfill_gets_default_replica_routing_from_mlb(self):
+        server_args = ServerArgs(
+            model_path="dummy",
+            moe_load_balancer_algorithm="waterfill",
+        )
+
+        server_args._handle_moe_load_balancer()
+
+        self.assertEqual(
+            server_args.moe_load_balancer_algorithm,
+            "static+waterfill",
+        )
+        capabilities = server_args.get_moe_load_balancer_pipeline().capabilities
+        self.assertTrue(capabilities.requires_rank_dispatch_map)
+
+    def test_eplb_default_replica_routing_comes_from_mlb(self):
+        server_args = ServerArgs(
+            model_path="dummy",
+            enable_eplb=True,
+            ep_size=2,
+        )
+
+        server_args._handle_moe_load_balancer()
+
+        self.assertEqual(server_args.moe_load_balancer_algorithm, "static")
+
 class TestPortArgs(unittest.TestCase):
     @patch("sglang.srt.server_args.get_free_port")
     @patch("sglang.srt.server_args.tempfile.NamedTemporaryFile")

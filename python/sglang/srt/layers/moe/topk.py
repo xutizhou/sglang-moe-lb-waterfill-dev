@@ -284,20 +284,24 @@ class TopK(MultiPlatformOp):
             assert num_expert_group is not None and topk_group is not None
 
         self.layer_id = layer_id
-        if num_fused_shared_experts > 0:
-            from sglang.srt.server_args import get_global_server_args
+        from sglang.srt.server_args import get_global_server_args
 
-            try:
-                self.enable_deepep_waterfill = (
-                    get_global_server_args().enable_deepep_waterfill
-                )
-            except ValueError:
-                self.enable_deepep_waterfill = False
-        else:
-            self.enable_deepep_waterfill = False
+        try:
+            pipeline = get_global_server_args().get_moe_load_balancer_pipeline()
+        except ValueError:
+            pipeline = None
+        capabilities = pipeline.capabilities if pipeline is not None else None
+        self.mlb_requires_post_topk_routing = (
+            capabilities is not None and capabilities.requires_post_topk_routing
+        )
+        self.mlb_routes_shared_expert = (
+            num_fused_shared_experts > 0
+            and capabilities is not None
+            and capabilities.routes_shared_expert
+        )
 
         self.moe_load_balancer = None
-        if self.enable_deepep_waterfill:
+        if self.mlb_routes_shared_expert:
             top_k -= num_fused_shared_experts
             num_fused_shared_experts = 0
             output_format = TopKOutputFormat.STANDARD
@@ -330,15 +334,13 @@ class TopK(MultiPlatformOp):
         forward_batch=None,
     ) -> TopKOutput:
         if self.moe_load_balancer is None:
-            if self.enable_deepep_waterfill:
+            if self.mlb_requires_post_topk_routing:
                 raise RuntimeError(
                     "MLB L2 is enabled but ModelRunner did not attach MoELoadBalancer."
                 )
             return topk_output
         if not TopKOutputChecker.format_is_standard(topk_output):
-            raise RuntimeError(
-                "MLB L2 routing requires StandardTopKOutput."
-            )
+            raise RuntimeError("MLB L2 routing requires StandardTopKOutput.")
 
         from sglang.srt.eplb.moe_load_balancer_glue import route_topk_with_mlb
 

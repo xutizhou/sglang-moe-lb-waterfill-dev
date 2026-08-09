@@ -53,7 +53,7 @@ spec:
           - "64"
           #          - --init-expert-location
           #          - /home/aiges/tuned/attachment_ep_statistics/prefill_in1024.json
-          - --ep-dispatch-algorithm
+          - --moe-load-balancer-algorithm
           - dynamic
           - --eplb-algorithm
           - deepseek
@@ -200,7 +200,7 @@ spec:
           - "64"
           #- --init-expert-location
           #- /home/aiges/tuned/attachment_ep_statistics/prefill_in1024.json
-          - --ep-dispatch-algorithm
+          - --moe-load-balancer-algorithm
           - dynamic
           - --eplb-algorithm
           - deepseek

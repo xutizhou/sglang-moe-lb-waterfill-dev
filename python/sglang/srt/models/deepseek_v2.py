@@ -965,7 +965,7 @@ class DeepseekV2MoE(nn.Module):
             if (
                 is_deepep_class_backend()
                 and self.num_fused_shared_experts > 0
-                and not getattr(self.topk, "enable_deepep_waterfill", False)
+                and not getattr(self.topk, "mlb_routes_shared_expert", False)
             ):
                 n = self.num_fused_shared_experts
                 topk_output = topk_output._replace(

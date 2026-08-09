@@ -1589,8 +1589,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         server_args = self.server_args
         needs_mlb = (
             server_args.enable_eplb
-            or server_args.ep_dispatch_algorithm == "lp"
-            or server_args.enable_deepep_waterfill
+            or server_args.moe_load_balancer_algorithm is not None
             or server_args.init_expert_location != "trivial"
         )
         if not needs_mlb:
@@ -1598,60 +1597,47 @@ class ModelRunner(ModelRunnerKVCacheMixin):
 
         from moe_load_balancer import MoELoadBalancer
 
-        routing_policies = {}
-        if server_args.ep_dispatch_algorithm == "lp":
-            from moe_load_balancer.kernels.lplb import CUDALPLBKernels
-            from moe_load_balancer.policies.l2.lplb import LPLBL2Router
+        algorithm = server_args.moe_load_balancer_algorithm
+        if algorithm is None:
+            return MoELoadBalancer()
 
-            common = ExpertLocationMetadata._init_common(
-                server_args,
-                self.model_config,
-            )
-            if common is None:
-                raise ValueError("LPLB requires MoE expert-location metadata.")
-            routing_policies["lplb"] = LPLBL2Router(
-                kernels=CUDALPLBKernels(),
-                num_gpus=common["ep_size"],
-            )
-
-        if server_args.enable_deepep_waterfill:
-            from moe_load_balancer.policies.l2.waterfill import WaterfillL2Router
-
-            routing_policies["waterfill"] = WaterfillL2Router(
-                source_rank=self.moe_ep_rank,
-                world_size=self.moe_ep_size,
-            )
-
-        return MoELoadBalancer(routing_policies=routing_policies)
+        common = ExpertLocationMetadata._init_common(
+            server_args,
+            self.model_config,
+        )
+        if common is None:
+            raise ValueError("MLB routing requires MoE expert-location metadata.")
+        return MoELoadBalancer.from_algorithm(
+            algorithm,
+            ep_size=common["ep_size"],
+            source_rank=self.moe_ep_rank,
+            experts_per_rank=common["num_local_physical_experts"],
+        )
 
     def _prepare_moe_topk(self):
-        enable_l2 = (
-            self.server_args.ep_dispatch_algorithm == "lp"
-            or self.server_args.enable_deepep_waterfill
-        )
-        if not enable_l2:
+        if (
+            self.moe_load_balancer is None
+            or not self.moe_load_balancer.routing_capabilities.requires_post_topk_routing
+        ):
             return
-        if self.moe_load_balancer is None:
-            raise RuntimeError("MLB L2 is enabled but MoELoadBalancer was not created.")
 
         placement_metadata = get_global_expert_location_metadata()
         if placement_metadata is None:
             raise RuntimeError("MLB L2 requires committed expert metadata.")
-        if self.server_args.ep_dispatch_algorithm == "lp":
-            from moe_load_balancer.adapters.sglang import to_placement_snapshot
+        from moe_load_balancer.adapters.sglang import to_placement_snapshot
 
         num_prepared = 0
         for module in self.model.modules():
             if not isinstance(module, TopK):
                 continue
             module.moe_load_balancer = self.moe_load_balancer
-            if self.server_args.ep_dispatch_algorithm == "lp":
-                if module.layer_id is None:
-                    raise RuntimeError("LPLB requires every MoE TopK to have layer_id.")
-                self.moe_load_balancer.prepare_routing_layer(
-                    "lplb",
-                    to_placement_snapshot(placement_metadata, module.layer_id),
+            if module.layer_id is None:
+                raise RuntimeError(
+                    "MLB routing requires every MoE TopK to have layer_id."
                 )
+            self.moe_load_balancer.on_placement_committed(
+                to_placement_snapshot(placement_metadata, module.layer_id)
+            )
             num_prepared += 1
         if num_prepared:
             log_info_on_rank0(
@@ -1659,10 +1645,13 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 f"Attached one MoELoadBalancer to {num_prepared} TopK modules.",
             )
 
-    def _prepare_updated_lplb_layers(self, update_layer_ids: List[int]):
-        """Prepare placement-derived LPLB state after placement apply."""
+    def _notify_mlb_placement_committed(self, update_layer_ids: List[int]):
+        """Pass framework-committed placement metadata to active MLB policies."""
 
-        if self.server_args.ep_dispatch_algorithm != "lp":
+        if (
+            self.moe_load_balancer is None
+            or not self.moe_load_balancer.routing_capabilities.requires_placement_state
+        ):
             return
 
         from moe_load_balancer.adapters.sglang import to_placement_snapshot
@@ -1670,27 +1659,9 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         placement_metadata = get_global_expert_location_metadata()
         if placement_metadata is None:
             raise RuntimeError("MLB L2 requires committed expert metadata.")
-        requires_graph_recapture = False
         for layer_id in update_layer_ids:
             snapshot = to_placement_snapshot(placement_metadata, layer_id)
-            storage_changed = self.moe_load_balancer.prepare_routing_layer(
-                "lplb", snapshot
-            )
-            requires_graph_recapture = storage_changed or requires_graph_recapture
-        if requires_graph_recapture:
-            self._recapture_moe_l2_graphs()
-
-    def _recapture_moe_l2_graphs(self):
-        """Recapture existing execution graphs after an LPLB shape change."""
-
-        had_device_graph = getattr(self, "graph_runner", None) is not None
-        had_piecewise_graph = (
-            getattr(self, "piecewise_cuda_graph_runner", None) is not None
-        )
-        if had_device_graph:
-            self.init_device_graphs()
-        if had_piecewise_graph:
-            self.init_piecewise_cuda_graphs()
+            self.moe_load_balancer.on_placement_committed(snapshot)
 
     def update_expert_location(
         self,
@@ -1734,7 +1705,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                     weight_name_filter=weight_name_filter,
                 )
 
-        self._prepare_updated_lplb_layers(update_layer_ids)
+        self._notify_mlb_placement_committed(update_layer_ids)
 
     def maybe_recover_ep_ranks(self):
         # TODO(perf): `active_ranks.all()` on a CUDA tensor triggers host-device
