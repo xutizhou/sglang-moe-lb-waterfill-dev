@@ -3201,20 +3201,20 @@ class ServerArgs:
         if self.enable_eplb:
             assert self.ep_size > 1
 
-        # LPLB ("lp") is routed through the moe_load_balancer SDK rather than
-        # a native SGLang solver class. Fail fast at startup if it isn't
-        # importable so the failure surfaces before the first forward pass.
-        if self.ep_dispatch_algorithm == "lp":
+        # Physical replica routing is owned by the moe_load_balancer SDK.
+        # Fail fast at startup so a missing dependency is reported before the
+        # first MoE forward pass.
+        if self.ep_dispatch_algorithm is not None:
             try:
                 import moe_load_balancer  # noqa: F401
             except ImportError as exc:
                 raise RuntimeError(
-                    "--ep-dispatch-algorithm=lp requires the moe_load_balancer "
+                    "--ep-dispatch-algorithm requires the moe_load_balancer "
                     "package. Install it from "
-                    "https://github.com/xutizhou/moe_load_balancer (branch "
-                    "lplb-impl or main once merged) into the active "
-                    "environment."
+                    "https://github.com/xutizhou/moe_load_balancer into the "
+                    "active environment."
                 ) from exc
+        if self.ep_dispatch_algorithm == "lp":
             if not self.enable_deepep_waterfill and not self.disable_shared_experts_fusion:
                 logger.warning(
                     "Shared-expert fusion is disabled for standalone LPLB; "

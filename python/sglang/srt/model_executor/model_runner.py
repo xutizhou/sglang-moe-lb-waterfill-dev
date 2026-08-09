@@ -1659,6 +1659,39 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 f"Attached one MoELoadBalancer to {num_prepared} TopK modules.",
             )
 
+    def _prepare_updated_lplb_layers(self, update_layer_ids: List[int]):
+        """Prepare placement-derived LPLB state after placement apply."""
+
+        if self.server_args.ep_dispatch_algorithm != "lp":
+            return
+
+        from moe_load_balancer.adapters.sglang import to_placement_snapshot
+
+        placement_metadata = get_global_expert_location_metadata()
+        if placement_metadata is None:
+            raise RuntimeError("MLB L2 requires committed expert metadata.")
+        requires_graph_recapture = False
+        for layer_id in update_layer_ids:
+            snapshot = to_placement_snapshot(placement_metadata, layer_id)
+            storage_changed = self.moe_load_balancer.prepare_routing_layer(
+                "lplb", snapshot
+            )
+            requires_graph_recapture = storage_changed or requires_graph_recapture
+        if requires_graph_recapture:
+            self._recapture_moe_l2_graphs()
+
+    def _recapture_moe_l2_graphs(self):
+        """Recapture existing execution graphs after an LPLB shape change."""
+
+        had_device_graph = getattr(self, "graph_runner", None) is not None
+        had_piecewise_graph = (
+            getattr(self, "piecewise_cuda_graph_runner", None) is not None
+        )
+        if had_device_graph:
+            self.init_device_graphs()
+        if had_piecewise_graph:
+            self.init_piecewise_cuda_graphs()
+
     def update_expert_location(
         self,
         new_expert_location_metadata: ExpertLocationMetadata,
@@ -1700,6 +1733,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                     get_global_server_args().load_format,
                     weight_name_filter=weight_name_filter,
                 )
+
+        self._prepare_updated_lplb_layers(update_layer_ids)
 
     def maybe_recover_ep_ranks(self):
         # TODO(perf): `active_ranks.all()` on a CUDA tensor triggers host-device

@@ -67,9 +67,14 @@ def transform_select_experts_inputs(
     info: Optional[ExpertLocationDispatchInfo],
 ):
     if (info is not None) and (info.ep_dispatch_algorithm == "fake"):
-        router_logits.uniform_(5, 10)
-        if correction_bias is not None:
-            correction_bias = torch.zeros_like(correction_bias)
+        from moe_load_balancer.policies.l2.replica import (
+            transform_fake_routing_inputs,
+        )
+
+        router_logits, correction_bias = transform_fake_routing_inputs(
+            router_logits,
+            correction_bias,
+        )
     return router_logits, correction_bias
 
 
@@ -92,21 +97,21 @@ def topk_ids_logical_to_physical(
 def _topk_ids_logical_to_physical_static(
     topk_ids: torch.Tensor, info: Optional[ExpertLocationDispatchInfo]
 ) -> torch.Tensor:
-    return info.partial_logical_to_rank_dispatch_physical_map[topk_ids]
+    from moe_load_balancer.policies.l2.replica import route_static_replicas
+
+    return route_static_replicas(
+        topk_ids,
+        info.partial_logical_to_rank_dispatch_physical_map,
+    )
 
 
 def _topk_ids_logical_to_physical_dynamic(
     topk_ids: torch.Tensor, info: Optional[ExpertLocationDispatchInfo]
 ) -> torch.Tensor:
-    topk_ids_original_shape = topk_ids.shape
-    device = topk_ids.device
-    topk_ids = topk_ids.flatten()
+    from moe_load_balancer.policies.l2.replica import route_dynamic_replicas
 
-    chosen_dispatch_index = (
-        torch.randint(0, 65536, topk_ids.shape, dtype=torch.int32, device=device)
-        % info.partial_logical_to_all_physical_map_num_valid[topk_ids]
+    return route_dynamic_replicas(
+        topk_ids,
+        info.partial_logical_to_all_physical_map,
+        info.partial_logical_to_all_physical_map_num_valid,
     )
-    topk_ids = info.partial_logical_to_all_physical_map[topk_ids, chosen_dispatch_index]
-
-    topk_ids = topk_ids.view(topk_ids_original_shape)
-    return topk_ids

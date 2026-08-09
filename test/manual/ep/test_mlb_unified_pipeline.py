@@ -13,7 +13,10 @@ from types import SimpleNamespace
 import torch
 import torch.distributed as dist
 from moe_load_balancer import MoELoadBalancer
-from moe_load_balancer.adapters.sglang import to_placement_request
+from moe_load_balancer.adapters.sglang import (
+    to_placement_request,
+    to_placement_snapshot,
+)
 from moe_load_balancer.kernels.lplb import CUDALPLBKernels
 from moe_load_balancer.policies.l2.lplb import LPLBL2Router
 from moe_load_balancer.policies.l2.waterfill import WaterfillL2Router
@@ -157,6 +160,8 @@ def main():
         }
     )
     _run_l1_eplb(mlb, device)
+    placement = to_placement_snapshot(metadata, 0)
+    mlb.prepare_routing_layer("lplb", placement)
     for mode in (
         "lplb",
         "waterfill",
