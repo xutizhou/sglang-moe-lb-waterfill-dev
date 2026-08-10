@@ -341,27 +341,10 @@ class TopK(MultiPlatformOp):
 
         from sglang.srt.eplb.moe_load_balancer_glue import route_topk_with_mlb
 
-        num_shared = self.topk_config.num_fused_shared_experts
-        if topk_output.topk_ids.shape[1] != self.topk_config.top_k:
-            # Empty DeepEP batches carry routed columns only; the model adds
-            # empty shared columns after TopK returns.
-            num_shared = 0
-        if num_shared > 0:
-            routed_output = topk_output._replace(
-                topk_weights=topk_output.topk_weights[:, :-num_shared],
-                topk_ids=topk_output.topk_ids[:, :-num_shared],
-            )
-            shared_ids = topk_output.topk_ids[:, -num_shared:]
-            shared_weights = topk_output.topk_weights[:, -num_shared:]
-        else:
-            routed_output = topk_output
-            shared_ids = None
-            shared_weights = None
-
-        routed_output = route_topk_with_mlb(
+        return route_topk_with_mlb(
             moe_load_balancer=self.moe_load_balancer,
             layer_id=self.layer_id,
-            topk_output=routed_output,
+            topk_output=topk_output,
             num_tokens=num_tokens,
             num_token_non_padded=num_token_non_padded,
             forward_batch=forward_batch,
@@ -371,28 +354,6 @@ class TopK(MultiPlatformOp):
                 else 1.0
             ),
         )
-        if num_shared == 0:
-            return routed_output
-
-        routed_output = routed_output._replace(
-            topk_weights=torch.cat(
-                (routed_output.topk_weights, shared_weights), dim=-1
-            ),
-            topk_ids=torch.cat((routed_output.topk_ids, shared_ids), dim=-1),
-        )
-        if is_deepep_class_backend():
-            topk_ids, topk_weights = _remap_topk_for_deepep(
-                routed_output.topk_ids,
-                routed_output.topk_weights,
-                num_shared,
-                routed_output.router_logits.shape[1],
-                self.topk_config,
-            )
-            routed_output = routed_output._replace(
-                topk_ids=topk_ids,
-                topk_weights=topk_weights,
-            )
-        return routed_output
 
     def forward_native(
         self,
