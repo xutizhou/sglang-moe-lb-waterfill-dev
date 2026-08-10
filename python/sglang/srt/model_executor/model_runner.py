@@ -121,6 +121,7 @@ from sglang.srt.layers.dp_attention import (
     set_is_extend_in_batch,
 )
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
+from sglang.srt.layers.moe.hash_topk import HashTopK
 from sglang.srt.layers.moe.topk import TopK
 from sglang.srt.layers.pooler import EmbeddingPoolerOutput
 from sglang.srt.layers.quantization.fp8_kernel import fp8_dtype
@@ -1597,6 +1598,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
 
         from moe_load_balancer import MoELoadBalancer
 
+        from sglang.srt.eplb.moe_load_balancer_glue import SGLangRoutingCollectives
+
         algorithm = server_args.moe_load_balancer_algorithm
         if algorithm is None:
             return MoELoadBalancer()
@@ -1612,6 +1615,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             ep_size=common["ep_size"],
             source_rank=self.moe_ep_rank,
             experts_per_rank=common["num_local_physical_experts"],
+            collectives=SGLangRoutingCollectives(),
         )
 
     def _prepare_moe_topk(self):
@@ -1628,7 +1632,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
 
         num_prepared = 0
         for module in self.model.modules():
-            if not isinstance(module, TopK):
+            if not isinstance(module, (TopK, HashTopK)):
                 continue
             module.moe_load_balancer = self.moe_load_balancer
             if module.layer_id is None:

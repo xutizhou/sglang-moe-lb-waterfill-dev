@@ -494,6 +494,7 @@ class DeepseekV2MoE(nn.Module):
                 num_experts=config.n_routed_experts,
                 num_fused_shared_experts=self.num_fused_shared_experts,
                 vocab_size=config.vocab_size,
+                layer_id=self.layer_id,
                 scoring_func=config.scoring_func,
                 routed_scaling_factor=self.routed_scaling_factor,
                 apply_routed_scaling_factor_on_output=self.experts.should_fuse_routed_scaling_factor_in_topk,

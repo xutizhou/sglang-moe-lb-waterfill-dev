@@ -100,7 +100,7 @@ class TestMoELoadBalancerAlgorithm(unittest.TestCase):
             "lplb+waterfill",
         )
         capabilities = server_args.get_moe_load_balancer_pipeline().capabilities
-        self.assertTrue(capabilities.requires_global_logical_count)
+        self.assertTrue(capabilities.requires_placement_state)
         self.assertTrue(capabilities.routes_shared_expert)
 
     def test_bare_waterfill_gets_default_replica_routing_from_mlb(self):

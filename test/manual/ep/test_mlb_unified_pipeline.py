@@ -16,7 +16,7 @@ from moe_load_balancer.adapters.sglang import (
     to_placement_request,
     to_placement_snapshot,
 )
-from moe_load_balancer.policies.l2.replica import route_replicas
+
 from sglang.srt.eplb import moe_load_balancer_glue as glue
 from sglang.srt.layers.moe.topk import StandardTopKOutput
 
@@ -85,14 +85,6 @@ def _run_l2_mode(mlb, metadata, recorder, rank, mode, device):
         logical_ids = torch.tensor([[0, 1], [0, 1]], dtype=torch.int32, device=device)
     else:
         logical_ids = torch.tensor([[0, 1], [1, 1]], dtype=torch.int32, device=device)
-    if mlb.routing_capabilities.routes_replicas_inline:
-        logical_ids = route_replicas(
-            mlb.routing_capabilities.replica_policy,
-            logical_ids,
-            default_physical_for_logical=metadata.logical_to_rank_dispatch_physical_map[0],
-            logical_to_physical_candidates=metadata.logical_to_all_physical_map[0],
-            logical_to_physical_count=metadata.logical_to_all_physical_map_num_valid[0],
-        )
     num_tokens = logical_ids.shape[0]
     output = glue.route_topk_with_mlb(
         moe_load_balancer=mlb,
@@ -129,7 +121,6 @@ def main():
     metadata = _Metadata(device, rank)
     ep_group = _EPGroup()
     glue.get_moe_ep_group = lambda: ep_group
-    glue.moe_expert_parallel_all_reduce = ep_group.all_reduce
     glue.get_global_expert_location_metadata = lambda: metadata
     glue.get_global_expert_distribution_recorder = lambda: recorder
 
@@ -148,6 +139,7 @@ def main():
             ep_size=2,
             source_rank=rank,
             experts_per_rank=2,
+            collectives=glue.SGLangRoutingCollectives(),
         )
         mlb.on_placement_committed(placement)
         _run_l2_mode(mlb, metadata, recorder, rank, mode, device)
