@@ -5,6 +5,9 @@ from unittest.mock import MagicMock, patch
 import torch
 
 from sglang.srt.expert_transfer.ultraep import UltraEPExpertTransfer
+from sglang.test.ci.ci_register import register_cpu_ci
+
+register_cpu_ci(est_time=1, suite="stage-a-test-cpu")
 
 
 def test_transfer_uses_only_current_layer_tensors():
@@ -17,8 +20,8 @@ def test_transfer_uses_only_current_layer_tensors():
     manager_type = MagicMock(return_value=manager)
     get_quant_info = MagicMock(
         return_value=SimpleNamespace(
-            w13_weight=torch.empty((3, 4)),
-            w2_weight=torch.empty((3, 2)),
+            w13_weight=torch.empty((4, 4)),
+            w2_weight=torch.empty((4, 2)),
             w13_scale=None,
             w2_scale=None,
             b13=None,
@@ -28,7 +31,8 @@ def test_transfer_uses_only_current_layer_tensors():
         )
     )
     experts = SimpleNamespace(
-        quant_method=SimpleNamespace(get_triton_quant_info=get_quant_info)
+        quant_method=SimpleNamespace(get_triton_quant_info=get_quant_info),
+        num_fused_shared_experts=1,
     )
     placement = SimpleNamespace(
         physical_to_logical=torch.tensor([0, 1, 0], dtype=torch.int32),
@@ -65,6 +69,8 @@ def test_transfer_uses_only_current_layer_tensors():
     get_quant_info.assert_called_once_with(experts)
     stream_type.return_value.wait_stream.assert_called_once()
     manager.transfer_from_placement.assert_called_once()
+    assert manager.transfer_from_placement.call_args.args[1].shape[0] == 3
+    assert manager.transfer_from_placement.call_args.args[2].shape[0] == 3
     assert gathered_result is gathered
     manager.all_gather_loads.assert_called_once()
     gather_event.current_stream_wait.assert_called_once()

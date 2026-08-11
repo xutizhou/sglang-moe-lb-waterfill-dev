@@ -181,9 +181,7 @@ class ExpertLocationMetadata:
         return ExpertLocationMetadata._init_raw(
             server_args=server_args,
             ep_size=common["ep_size"],
-            physical_to_logical_map=maps.physical_to_logical_map.to(
-                server_args.device
-            ),
+            physical_to_logical_map=maps.physical_to_logical_map.to(server_args.device),
             logical_to_all_physical_map=maps.logical_to_all_physical_map.to(
                 server_args.device
             ),
@@ -231,6 +229,10 @@ class ExpertLocationMetadata:
         logical_to_all_physical_map_num_valid = torch.count_nonzero(
             logical_to_all_physical_map != -1, dim=-1
         )
+        pipeline = server_args.get_moe_load_balancer_pipeline()
+        requires_rank_dispatch_map = (
+            pipeline is not None and pipeline.capabilities.requires_rank_dispatch_map
+        )
 
         return ExpertLocationMetadata(
             physical_to_logical_map=physical_to_logical_map,
@@ -247,7 +249,7 @@ class ExpertLocationMetadata:
                     # TODO improve when we have real EP rank
                     ep_rank=torch.distributed.get_rank() % ep_size,
                 )
-                if server_args.ep_dispatch_algorithm == "static"
+                if requires_rank_dispatch_map
                 else None
             ),
         )
@@ -589,30 +591,26 @@ def compute_initial_expert_location_metadata(
     moe_ep_rank: int,
     moe_load_balancer=None,
 ) -> Optional[ExpertLocationMetadata]:
-    if server_args.moe_balance_policy == "ultraep":
-        from moe_load_balancer.policies.l3 import (
-            build_ultraep_initial_physical_to_logical_map,
-        )
-
+    if moe_load_balancer is not None:
         common = ExpertLocationMetadata._init_common(server_args, model_config)
-        if common is None:
-            return None
-        model_location = common["model_config_for_expert_location"]
-        mapping = build_ultraep_initial_physical_to_logical_map(
-            num_layers=model_location.num_layers,
-            num_logical_experts=model_location.num_logical_experts,
-            ep_size=common["ep_size"],
-            num_redundant_experts_per_rank=(
-                server_args.ep_num_redundant_experts // common["ep_size"]
-            ),
-            device=server_args.device,
-        )
-        return ExpertLocationMetadata.init_by_mapping(
-            server_args,
-            model_config,
-            physical_to_logical_map=mapping,
-            moe_ep_rank=moe_ep_rank,
-        )
+        if common is not None:
+            model_location = common["model_config_for_expert_location"]
+            mapping = moe_load_balancer.build_initial_physical_to_logical_map(
+                num_layers=model_location.num_layers,
+                num_logical_experts=model_location.num_logical_experts,
+                ep_size=common["ep_size"],
+                num_redundant_experts_per_rank=(
+                    server_args.ep_num_redundant_experts // common["ep_size"]
+                ),
+                device=server_args.device,
+            )
+            if mapping is not None:
+                return ExpertLocationMetadata.init_by_mapping(
+                    server_args,
+                    model_config,
+                    physical_to_logical_map=mapping,
+                    moe_ep_rank=moe_ep_rank,
+                )
 
     data = server_args.init_expert_location
     if data == "trivial":
@@ -652,7 +650,6 @@ def compute_initial_expert_location_metadata(
         raise NotImplementedError(
             f"Unknown init_expert_location format ({list(data_dict.keys())=})"
         )
-
 
 
 def _mlb_eplb_active_ranks(server_args):

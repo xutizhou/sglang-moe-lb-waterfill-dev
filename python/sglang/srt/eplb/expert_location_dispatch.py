@@ -12,53 +12,22 @@
 # limitations under the License.
 # ==============================================================================
 
-from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Optional
 
 import torch
 
-from sglang.srt.eplb.expert_location import get_global_expert_location_metadata
-from sglang.srt.server_args import get_global_server_args
 
-
-@dataclass
 class ExpertLocationDispatchInfo:
-    ep_dispatch_algorithm: Literal["static", "dynamic", "fake", "lp", "mlb"]
-    # (num_logical_experts,)
-    partial_logical_to_rank_dispatch_physical_map: Optional[torch.Tensor]
-    # (num_logical_experts, X)
-    partial_logical_to_all_physical_map: torch.Tensor
-    # (num_logical_experts,)
-    partial_logical_to_all_physical_map_num_valid: torch.Tensor
-    num_physical_experts: int
+    """Compatibility shim for model call sites pending signature cleanup.
+
+    Replica routing and experimental TopK transforms are both invoked through
+    the attached ``MoELoadBalancer``. No algorithm state is carried here.
+    """
 
     @classmethod
     def init_new(cls, layer_id: int):
-        ep_dispatch_algorithm = get_global_server_args().ep_dispatch_algorithm
-        expert_location_metadata = get_global_expert_location_metadata()
-        assert expert_location_metadata is not None
-
-        if ep_dispatch_algorithm is None:
-            return None
-
-        return cls(
-            ep_dispatch_algorithm=ep_dispatch_algorithm,
-            partial_logical_to_rank_dispatch_physical_map=(
-                expert_location_metadata.logical_to_rank_dispatch_physical_map[
-                    layer_id, :
-                ]
-                if expert_location_metadata.logical_to_rank_dispatch_physical_map
-                is not None
-                else None
-            ),
-            partial_logical_to_all_physical_map=expert_location_metadata.logical_to_all_physical_map[
-                layer_id, :
-            ],
-            partial_logical_to_all_physical_map_num_valid=expert_location_metadata.logical_to_all_physical_map_num_valid[
-                layer_id, :
-            ],
-            num_physical_experts=expert_location_metadata.num_physical_experts,
-        )
+        del layer_id
+        return None
 
 
 def transform_select_experts_inputs(
@@ -66,47 +35,5 @@ def transform_select_experts_inputs(
     correction_bias: Optional[torch.Tensor],
     info: Optional[ExpertLocationDispatchInfo],
 ):
-    if (info is not None) and (info.ep_dispatch_algorithm == "fake"):
-        router_logits.uniform_(5, 10)
-        if correction_bias is not None:
-            correction_bias = torch.zeros_like(correction_bias)
+    del info
     return router_logits, correction_bias
-
-
-def topk_ids_logical_to_physical(
-    topk_ids: torch.Tensor, info: Optional[ExpertLocationDispatchInfo]
-) -> torch.Tensor:
-    if info is None:
-        return topk_ids
-
-    if info.ep_dispatch_algorithm == "static":
-        return _topk_ids_logical_to_physical_static(topk_ids, info)
-    if info.ep_dispatch_algorithm in ["dynamic", "fake"]:
-        return _topk_ids_logical_to_physical_dynamic(topk_ids, info)
-    if info.ep_dispatch_algorithm in ("lp", "mlb"):
-        # The unified MLB L2 hook runs after logical TopK selection.
-        return topk_ids
-    raise NotImplementedError(f"Unknown algorithm {info.ep_dispatch_algorithm}")
-
-
-def _topk_ids_logical_to_physical_static(
-    topk_ids: torch.Tensor, info: Optional[ExpertLocationDispatchInfo]
-) -> torch.Tensor:
-    return info.partial_logical_to_rank_dispatch_physical_map[topk_ids]
-
-
-def _topk_ids_logical_to_physical_dynamic(
-    topk_ids: torch.Tensor, info: Optional[ExpertLocationDispatchInfo]
-) -> torch.Tensor:
-    topk_ids_original_shape = topk_ids.shape
-    device = topk_ids.device
-    topk_ids = topk_ids.flatten()
-
-    chosen_dispatch_index = (
-        torch.randint(0, 65536, topk_ids.shape, dtype=torch.int32, device=device)
-        % info.partial_logical_to_all_physical_map_num_valid[topk_ids]
-    )
-    topk_ids = info.partial_logical_to_all_physical_map[topk_ids, chosen_dispatch_index]
-
-    topk_ids = topk_ids.view(topk_ids_original_shape)
-    return topk_ids

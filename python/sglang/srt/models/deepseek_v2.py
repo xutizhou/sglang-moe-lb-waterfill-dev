@@ -494,6 +494,7 @@ class DeepseekV2MoE(nn.Module):
                 num_experts=config.n_routed_experts,
                 num_fused_shared_experts=self.num_fused_shared_experts,
                 vocab_size=config.vocab_size,
+                layer_id=self.layer_id,
                 scoring_func=config.scoring_func,
                 routed_scaling_factor=self.routed_scaling_factor,
                 apply_routed_scaling_factor_on_output=self.experts.should_fuse_routed_scaling_factor_in_topk,
@@ -643,9 +644,7 @@ class DeepseekV2MoE(nn.Module):
             # DeepEP stores one fused shared-expert slot after this rank's
             # routed experts. EPLB must migrate only routed expert weights;
             # the shared slot stays fixed on its home rank.
-            weights = [
-                weight[: -self.num_fused_shared_experts] for weight in weights
-            ]
+            weights = [weight[: -self.num_fused_shared_experts] for weight in weights]
         return weights
 
     def forward(
@@ -966,7 +965,7 @@ class DeepseekV2MoE(nn.Module):
             if (
                 is_deepep_class_backend()
                 and self.num_fused_shared_experts > 0
-                and not getattr(self.topk, "enable_deepep_waterfill", False)
+                and not getattr(self.topk, "mlb_routes_shared_expert", False)
             ):
                 n = self.num_fused_shared_experts
                 topk_output = topk_output._replace(

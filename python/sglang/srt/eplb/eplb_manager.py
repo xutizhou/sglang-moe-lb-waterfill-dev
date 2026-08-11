@@ -89,7 +89,7 @@ class EPLBManager:
                 update_layer_ids=update_layer_ids,
             )
 
-        msg = "[EPLBManager] rebalance end"
+        msg = f"[EPLBManager] rebalance end"
         if enable_timing:
             torch.get_device_module().synchronize()
             time_end = time.time()

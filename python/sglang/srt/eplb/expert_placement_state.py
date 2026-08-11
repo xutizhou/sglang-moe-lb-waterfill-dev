@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
-
 from moe_load_balancer import PlacementPlan, PlacementSnapshot
 
 
@@ -87,10 +86,17 @@ class ExpertPlacementState:
     def commit(self, layer_id: int, metadata) -> None:
         candidate = self._pending.pop(layer_id)
         metadata.physical_to_logical_map[layer_id].copy_(candidate.physical_to_logical)
+        metadata.physical_to_logical_map_cpu[layer_id].copy_(
+            candidate.physical_to_logical.cpu()
+        )
         metadata.logical_to_all_physical_map[layer_id].fill_(-1)
+        metadata.logical_to_all_physical_map_cpu[layer_id].fill_(-1)
         width = candidate.logical_to_physical.shape[-1]
         metadata.logical_to_all_physical_map[layer_id, :, :width].copy_(
             candidate.logical_to_physical
+        )
+        metadata.logical_to_all_physical_map_cpu[layer_id, :, :width].copy_(
+            candidate.logical_to_physical.cpu()
         )
         metadata.logical_to_all_physical_map_num_valid[layer_id].copy_(
             candidate.replica_counts

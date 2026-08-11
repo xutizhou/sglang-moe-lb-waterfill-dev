@@ -55,7 +55,7 @@ class _BaseTestDynamicEPLB(CustomTestCase):
                     # TODO auto determine these flags
                     "--expert-distribution-recorder-mode",
                     "stat",
-                    "--ep-dispatch-algorithm",
+                    "--moe-load-balancer-algorithm",
                     "static",
                     *cls.extra_args,
                 ],
@@ -131,7 +131,7 @@ class TestStaticEPLB(CustomTestCase):
                 init_expert_location=str(snapshot_path),
                 port=21000,
                 # TODO auto determine these flags
-                ep_dispatch_algorithm="static",
+                moe_load_balancer_algorithm="static",
             )
             self._assert_engine_generate_correct(engine)
             print(f"Action: shutdown engine")

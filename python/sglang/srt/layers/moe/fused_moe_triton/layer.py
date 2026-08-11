@@ -624,34 +624,31 @@ class FusedMoE(torch.nn.Module):
             )
             return
 
-        if (
-            self._has_fused_shared
-            and expert_id >= global_expert_location_metadata.num_logical_experts
-        ):
+        require_global_experts = getattr(param, "_sglang_require_global_experts", False)
+        shared_expert_id = (
+            expert_id - global_expert_location_metadata.num_logical_experts
+            if self._has_fused_shared and expert_id is not None
+            else -1
+        )
+        if shared_expert_id >= 0:
             # Checkpoint shared experts are numbered immediately after the
             # logical routed experts.  EPLB can add redundant *physical*
-            # routed experts, so ``self._num_global_routed`` may be larger
-            # than that checkpoint boundary.  Replicate each shared expert
-            # into the fixed shared slot on every EP rank; Waterfill may send
-            # a token's shared-expert work to any of those ranks.
-            shared_expert_id = (
-                expert_id - global_expert_location_metadata.num_logical_experts
-            )
+            # routed experts, so the checkpoint and physical boundaries differ.
             if shared_expert_id >= self.num_fused_shared_experts:
                 raise ValueError(
                     f"Shared expert id {shared_expert_id} exceeds "
                     f"num_fused_shared_experts={self.num_fused_shared_experts}."
                 )
-            physical_expert_ids = [
-                self._num_global_routed
-                + ep_rank * self.num_fused_shared_experts
-                + shared_expert_id
-                for ep_rank in range(self.moe_ep_size)
-            ]
+            if require_global_experts and is_deepep_class_backend():
+                physical_expert_ids = [
+                    rank * self.num_local_experts
+                    + self._num_local_routed
+                    + shared_expert_id
+                    for rank in range(self.moe_ep_size)
+                ]
+            else:
+                physical_expert_ids = [self._num_global_routed + shared_expert_id]
         else:
-            require_global_experts = getattr(
-                param, "_sglang_require_global_experts", False
-            )
             physical_expert_ids = (
                 global_expert_location_metadata.logical_to_all_physical(
                     self.layer_id, expert_id, require_global_experts

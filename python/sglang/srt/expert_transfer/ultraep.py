@@ -37,12 +37,20 @@ class UltraEPExpertTransfer:
         unsupported = ("b13", "b2", "w13_zp", "w2_zp")
         if any(getattr(info, name, None) is not None for name in unsupported):
             raise ValueError("UltraEP transfer does not support expert bias/zero-point")
-        return (
+        weights = (
             info.w13_weight,
             info.w2_weight,
             getattr(info, "w13_scale", None),
             getattr(info, "w2_scale", None),
         )
+        num_shared = getattr(experts, "num_fused_shared_experts", 0)
+        if num_shared > 0:
+            # DeepEP keeps fused shared slots after routed experts. Runtime
+            # placement migrates routed replicas only; shared slots stay fixed.
+            weights = tuple(
+                weight if weight is None else weight[:-num_shared] for weight in weights
+            )
+        return weights
 
     def _initialize(self, weights) -> None:
         try:

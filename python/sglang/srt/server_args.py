@@ -603,10 +603,7 @@ class ServerArgs:
     enable_aiter_allreduce_fusion: bool = False
     deepep_mode: Literal["auto", "normal", "low_latency"] = "auto"
     ep_num_redundant_experts: int = 0
-    ep_dispatch_algorithm: Optional[
-        Literal["static", "dynamic", "fake", "lp", "mlb"]
-    ] = None
-    moe_balance_policy: Optional[str] = None
+    moe_load_balancer_algorithm: Optional[str] = None
     moe_balance_refresh_interval: int = 64
     moe_balance_refresh_min_tokens: int = 512
     expert_transfer_backend: Literal["none", "ultraep"] = "none"
@@ -627,7 +624,6 @@ class ServerArgs:
     enable_elastic_expert_backup: bool = False
     mooncake_ib_device: Optional[str] = None
     elastic_ep_rejoin: bool = False
-    enable_deepep_waterfill: bool = False
 
     # Mamba cache
     max_mamba_cache_size: Optional[int] = None
@@ -924,8 +920,9 @@ class ServerArgs:
 
         # Handle MoE configurations.
         self._handle_moe_kernel_config()
+        self._handle_moe_load_balancer()
         self._handle_a2a_moe()
-        self._handle_eplb_and_dispatch()
+        self._validate_eplb_configuration()
         self._handle_expert_distribution_metrics()
         self._handle_elastic_ep()
 
@@ -3101,10 +3098,17 @@ class ServerArgs:
             )
 
     def _handle_a2a_moe(self):
-        if self.enable_deepep_waterfill and self.moe_a2a_backend != "deepep":
+        pipeline = self.get_moe_load_balancer_pipeline()
+        capabilities = pipeline.capabilities if pipeline is not None else None
+        requires_deepep = capabilities is not None and capabilities.requires_deepep
+        routes_shared_expert = (
+            capabilities is not None and capabilities.routes_shared_expert
+        )
+
+        if requires_deepep and self.moe_a2a_backend != "deepep":
             logger.warning(
                 "moe_a2a_backend is overridden to 'deepep' because DeepEP "
-                "Waterfill requires the DeepEP backend."
+                "routing is required by the configured MoE load balancer."
             )
             self.moe_a2a_backend = "deepep"
 
@@ -3116,17 +3120,17 @@ class ServerArgs:
             logger.warning(
                 f"DeepEP MoE is enabled. The expert parallel size is adjusted to be the same as the tensor parallel size[{self.tp_size}]."
             )
-            if self.enable_deepep_waterfill:
+            if routes_shared_expert:
                 if self.disable_shared_experts_fusion:
                     logger.warning(
                         "disable_shared_experts_fusion is overridden to False because "
-                        "DeepEP Waterfill requires shared expert fusion."
+                        "the configured MoE load balancer routes shared experts."
                     )
                     self.disable_shared_experts_fusion = False
                 self.enforce_shared_experts_fusion = True
                 logger.info(
-                    "DeepEP Waterfill is enabled. Shared expert will be dispatched "
-                    "through DeepEP for load balancing."
+                    "MLB shared-expert routing is enabled. The shared expert will "
+                    "be dispatched through DeepEP for load balancing."
                 )
 
         if self.moe_a2a_backend == "mooncake":
@@ -3192,31 +3196,73 @@ class ServerArgs:
                     self.chunked_prefill_size
                 ) <= envs.SGLANG_MORI_NUM_MAX_DISPATCH_TOKENS_PER_RANK.get(), "SGLANG_MORI_NUM_MAX_DISPATCH_TOKENS_PER_RANK (default 4096) must be larger or equal to chunked_prefill_size"
 
-    def _handle_eplb_and_dispatch(self):
+    @staticmethod
+    def _get_moe_load_balancer_pipeline_type():
+        try:
+            from moe_load_balancer import RoutingPipeline
+        except ImportError as exc:
+            raise RuntimeError(
+                "MoE routing requires the moe_load_balancer package. Install it "
+                "from https://github.com/xutizhou/moe_load_balancer into the "
+                "active environment."
+            ) from exc
+        return RoutingPipeline
+
+    def get_moe_load_balancer_pipeline(self):
+        """Return MLB's parsed algorithm pipeline, or None when it is disabled."""
+
+        if self.moe_load_balancer_algorithm is None:
+            return None
+        RoutingPipeline = self._get_moe_load_balancer_pipeline_type()
+        return RoutingPipeline.from_value(self.moe_load_balancer_algorithm)
+
+    def _handle_moe_load_balancer(self):
+        """Normalize the one public MLB algorithm expression and its aliases."""
+
+        if self.enable_eplb and (self.expert_distribution_recorder_mode is None):
+            self.expert_distribution_recorder_mode = "stat"
+            logger.warning(
+                "EPLB is enabled. The expert_distribution_recorder_mode is automatically set."
+            )
+
+        if (self.enable_eplb or (self.init_expert_location != "trivial")) and (
+            self.moe_load_balancer_algorithm is None
+        ):
+            RoutingPipeline = self._get_moe_load_balancer_pipeline_type()
+            self.moe_load_balancer_algorithm = (
+                RoutingPipeline.default_replica_routing().name
+            )
+
+        if self.moe_load_balancer_algorithm is None:
+            if self.expert_transfer_backend != "none":
+                raise ValueError(
+                    "An expert transfer backend requires an MLB runtime placement algorithm."
+                )
+            return
+
+        # Fail fast before the first MoE forward pass and canonicalize aliases
+        # and composition order in MLB itself.
+        pipeline = self.get_moe_load_balancer_pipeline()
+        assert pipeline is not None
+        self.moe_load_balancer_algorithm = pipeline.name
+
+        capabilities = pipeline.capabilities
         if (
             self.expert_transfer_backend != "none"
-            and self.moe_balance_policy is None
+            and not capabilities.requires_runtime_placement
         ):
             raise ValueError(
-                "An expert transfer backend requires a runtime MoE balance policy."
+                "An expert transfer backend requires an MLB runtime placement algorithm."
             )
-        if self.moe_balance_policy is not None:
-            if self.moe_balance_policy != "ultraep":
-                raise ValueError(
-                    f"Unsupported MoE balance policy {self.moe_balance_policy!r}."
-                )
-            if self.ep_size <= 1:
-                raise ValueError("MoE runtime balancing requires EP size greater than one.")
-            if self.ep_num_redundant_experts <= 0:
-                raise ValueError("MoE runtime balancing requires redundant experts.")
-            if self.ep_num_redundant_experts % self.ep_size != 0:
-                raise ValueError("Redundant experts must be divisible by EP size.")
+        if capabilities.requires_runtime_placement:
             if self.moe_balance_refresh_interval <= 0:
                 raise ValueError("MoE balance refresh interval must be positive.")
             if self.moe_balance_refresh_min_tokens <= 0:
                 raise ValueError("MoE balance refresh minimum tokens must be positive.")
-            if self.moe_a2a_backend != "deepep":
-                raise ValueError("MoE runtime balancing currently requires DeepEP.")
+            if self.expert_transfer_backend == "none":
+                raise ValueError(
+                    "MLB runtime placement requires an expert transfer backend."
+                )
             if self.enable_eplb:
                 raise ValueError(
                     "Runtime MoE balancing cannot be combined with periodic EPLB."
@@ -3229,52 +3275,39 @@ class ServerArgs:
                 raise ValueError(
                     "Runtime MoE balancing does not yet support speculative decoding."
                 )
-            if self.expert_transfer_backend == "none":
-                raise ValueError("MoE runtime balancing requires an expert transfer backend.")
-            if self.ep_dispatch_algorithm not in (None, "mlb"):
-                raise ValueError("MoE runtime balancing requires MLB physical routing.")
-            self.ep_dispatch_algorithm = "mlb"
             if not self.disable_cuda_graph:
                 logger.warning(
                     "CUDA graph is disabled for runtime MoE placement and transfer."
                 )
                 self.disable_cuda_graph = True
+
+        if (
+            capabilities.requires_post_topk_routing
+            and not capabilities.routes_shared_expert
+            and not self.disable_shared_experts_fusion
+        ):
+            logger.warning(
+                "Shared-expert fusion is disabled because the configured MLB "
+                "pipeline does not route shared experts."
+            )
             self.disable_shared_experts_fusion = True
 
-        if self.enable_eplb and (self.expert_distribution_recorder_mode is None):
-            self.expert_distribution_recorder_mode = "stat"
-            logger.warning(
-                "EPLB is enabled. The expert_distribution_recorder_mode is automatically set."
-            )
-
-        if (self.enable_eplb or (self.init_expert_location != "trivial")) and (
-            self.ep_dispatch_algorithm is None
-        ):
-            self.ep_dispatch_algorithm = "static"
-
+    def _validate_eplb_configuration(self):
+        # A2A backend normalization may update ep_size, so validate afterward.
         if self.enable_eplb:
             assert self.ep_size > 1
 
-        # LPLB ("lp") is routed through the moe_load_balancer SDK rather than
-        # a native SGLang solver class. Fail fast at startup if it isn't
-        # importable so the failure surfaces before the first forward pass.
-        if self.ep_dispatch_algorithm in ("lp", "mlb"):
-            try:
-                import moe_load_balancer  # noqa: F401
-            except ImportError as exc:
-                raise RuntimeError(
-                    "MLB expert routing requires the moe_load_balancer "
-                    "package. Install it from "
-                    "https://github.com/xutizhou/moe_load_balancer (branch "
-                    "lplb-impl or main once merged) into the active "
-                    "environment."
-                ) from exc
-            if not self.enable_deepep_waterfill and not self.disable_shared_experts_fusion:
-                logger.warning(
-                    "Shared-expert fusion is disabled for standalone LPLB; "
-                    "enable Waterfill to route the fused shared expert through MLB."
-                )
-                self.disable_shared_experts_fusion = True
+        pipeline = self.get_moe_load_balancer_pipeline()
+        if pipeline is None or not pipeline.capabilities.requires_runtime_placement:
+            return
+        if self.ep_size <= 1:
+            raise ValueError("MoE runtime balancing requires EP size greater than one.")
+        if self.ep_num_redundant_experts <= 0:
+            raise ValueError("MoE runtime balancing requires redundant experts.")
+        if self.ep_num_redundant_experts % self.ep_size != 0:
+            raise ValueError("Redundant experts must be divisible by EP size.")
+        if self.moe_a2a_backend != "deepep":
+            raise ValueError("MoE runtime balancing currently requires DeepEP.")
 
     def _handle_elastic_ep(self):
         if self.elastic_ep_backend is not None:
@@ -5853,16 +5886,14 @@ class ServerArgs:
             help="Allocate this number of redundant experts in expert parallel.",
         )
         parser.add_argument(
-            "--ep-dispatch-algorithm",
+            "--moe-load-balancer-algorithm",
             type=str,
-            default=ServerArgs.ep_dispatch_algorithm,
-            help="The algorithm to choose ranks for redundant experts in expert parallel.",
-        )
-        parser.add_argument(
-            "--moe-balance-policy",
-            choices=["ultraep"],
-            default=ServerArgs.moe_balance_policy,
-            help="Run a runtime expert placement and routing policy from MLB.",
+            default=ServerArgs.moe_load_balancer_algorithm,
+            help=(
+                "MLB routing algorithm or '+'-composed pipeline, for example "
+                "static, dynamic, fake, lplb, waterfill, waterfill_dynamic, "
+                "ultraep, or lplb+waterfill."
+            ),
         )
         parser.add_argument(
             "--moe-balance-refresh-interval",
@@ -5939,17 +5970,6 @@ class ServerArgs:
             type=str,
             default=ServerArgs.deepep_config,
             help="Tuned DeepEP config suitable for your own cluster. It can be either a string with JSON content or a file path.",
-        )
-        parser.add_argument(
-            "--enable-deepep-waterfill",
-            action="store_true",
-            default=ServerArgs.enable_deepep_waterfill,
-            help=(
-                "Enable DeepEP Waterfill for fused shared experts. It dispatches "
-                "the shared expert as an extra MoE slot to a lightly loaded EP rank "
-                "and automatically sets --moe-a2a-backend deepep with shared-expert "
-                "fusion enforced."
-            ),
         )
         parser.add_argument(
             "--moe-dense-tp-size",

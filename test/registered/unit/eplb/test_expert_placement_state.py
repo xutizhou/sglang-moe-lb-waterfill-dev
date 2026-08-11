@@ -1,9 +1,12 @@
 from types import SimpleNamespace
 
 import torch
-
 from moe_load_balancer import PlacementPlan
+
 from sglang.srt.eplb.expert_placement_state import ExpertPlacementState
+from sglang.test.ci.ci_register import register_cpu_ci
+
+register_cpu_ci(est_time=1, suite="stage-a-test-cpu")
 
 
 def test_candidate_is_published_only_after_commit():
@@ -14,7 +17,9 @@ def test_candidate_is_published_only_after_commit():
         num_local_physical_experts=3,
         ep_size=2,
         physical_to_logical_map=torch.zeros((2, 6), dtype=torch.int32),
+        physical_to_logical_map_cpu=torch.zeros((2, 6), dtype=torch.int32),
         logical_to_all_physical_map=torch.full((2, 4, 6), -1, dtype=torch.int32),
+        logical_to_all_physical_map_cpu=torch.full((2, 4, 6), -1, dtype=torch.int32),
         logical_to_all_physical_map_num_valid=torch.zeros((2, 4), dtype=torch.int32),
     )
     plan = PlacementPlan(
@@ -36,6 +41,7 @@ def test_candidate_is_published_only_after_commit():
     assert state.pending(1) is None
     assert state.has_active(1)
     assert metadata.physical_to_logical_map[1].tolist() == [0, 1, 0, 2, 3, 2]
+    assert metadata.physical_to_logical_map_cpu[1].tolist() == [0, 1, 0, 2, 3, 2]
     assert metadata.logical_to_all_physical_map_num_valid[1].tolist() == [2, 1, 2, 1]
     active = state.active_snapshot(1, metadata)
     assert active is not None

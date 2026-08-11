@@ -321,7 +321,7 @@ Please consult the documentation below and [server_args.py](https://github.com/s
 | `--enable-aiter-allreduce-fusion` | Enable aiter allreduce fusion with Residual RMSNorm. | `False` | bool flag (set to enable) |
 | `--deepep-mode` | Select the mode when enable DeepEP MoE, could be `normal`, `low_latency` or `auto`. Default is `auto`, which means `low_latency` for decode batch and `normal` for prefill batch. | `auto` | `normal`, `low_latency`, `auto` |
 | `--ep-num-redundant-experts` | Allocate this number of redundant experts in expert parallel. | `0` | Type: int |
-| `--ep-dispatch-algorithm` | The algorithm to choose ranks for redundant experts in expert parallel. | `None` | Type: str |
+| `--moe-load-balancer-algorithm` | MLB routing algorithm or `+`-composed pipeline, such as `static`, `dynamic`, `fake`, `lplb`, `waterfill`, or `lplb+waterfill`. | `None` | Type: str |
 | `--init-expert-location` | Initial location of EP experts. | `trivial` | Type: str |
 | `--enable-eplb` | Enable EPLB algorithm | `False` | bool flag (set to enable) |
 | `--eplb-algorithm` | Chosen EPLB algorithm | `auto` | Type: str |

@@ -7,10 +7,7 @@ import torch
 from torch import nn
 
 from sglang.srt.environ import envs
-from sglang.srt.eplb.expert_location_dispatch import (
-    ExpertLocationDispatchInfo,
-    topk_ids_logical_to_physical,
-)
+from sglang.srt.eplb.expert_location_dispatch import ExpertLocationDispatchInfo
 from sglang.srt.layers.moe.topk import (
     StandardTopKOutput,
     _mask_topk_ids_padded_region,
@@ -27,11 +24,33 @@ class HashTopK(nn.Module):
         num_experts,
         num_fused_shared_experts,
         vocab_size,
+        layer_id=None,
         scoring_func="sqrtsoftplus",
         routed_scaling_factor=1.5,
         apply_routed_scaling_factor_on_output=False,
     ):
         super().__init__()
+        self.layer_id = layer_id
+        from sglang.srt.server_args import get_global_server_args
+
+        try:
+            pipeline = get_global_server_args().get_moe_load_balancer_pipeline()
+        except ValueError:
+            pipeline = None
+        capabilities = pipeline.capabilities if pipeline is not None else None
+        self.mlb_requires_post_topk_routing = (
+            capabilities is not None and capabilities.requires_post_topk_routing
+        )
+        self.mlb_routes_shared_expert = (
+            num_fused_shared_experts > 0
+            and capabilities is not None
+            and capabilities.routes_shared_expert
+        )
+        self.moe_load_balancer = None
+        if self.mlb_routes_shared_expert:
+            topk -= num_fused_shared_experts
+            num_fused_shared_experts = 0
+
         self.num_experts = num_experts
         self.topk = topk
         self.routed_scaling_factor = routed_scaling_factor
@@ -49,7 +68,35 @@ class HashTopK(nn.Module):
         topk_weights = torch.empty((0, topk), dtype=torch.float32, device=device)
         topk_ids = torch.full((0, topk), -1, dtype=torch.int32, device=device)
         router_logits = torch.empty((0, topk), dtype=torch.float32, device=device)
-        return StandardTopKOutput(topk_weights, topk_ids, router_logits)
+        output = StandardTopKOutput(topk_weights, topk_ids, router_logits)
+        return self._apply_moe_load_balancer(output, 0)
+
+    def _apply_moe_load_balancer(
+        self,
+        topk_output: StandardTopKOutput,
+        num_tokens: int,
+        *,
+        num_token_non_padded: Optional[torch.Tensor] = None,
+        forward_batch=None,
+    ) -> StandardTopKOutput:
+        if self.moe_load_balancer is None:
+            if self.mlb_requires_post_topk_routing:
+                raise RuntimeError(
+                    "MLB L2 is enabled but ModelRunner did not attach MoELoadBalancer."
+                )
+            return topk_output
+
+        from sglang.srt.eplb.moe_load_balancer_glue import route_topk_with_mlb
+
+        return route_topk_with_mlb(
+            moe_load_balancer=self.moe_load_balancer,
+            layer_id=self.layer_id,
+            topk_output=topk_output,
+            num_tokens=num_tokens,
+            num_token_non_padded=num_token_non_padded,
+            forward_batch=forward_batch,
+            routed_scaling_factor=self.routed_scaling_factor,
+        )
 
     def _forward_torch(
         self, router_logits: torch.Tensor, input_ids: torch.Tensor
@@ -103,10 +150,17 @@ class HashTopK(nn.Module):
         input_ids: torch.Tensor,
         num_token_non_padded: Optional[torch.Tensor] = None,
         expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
+        forward_batch=None,
     ):
         assert (
             input_ids.shape[0] == hidden_states.shape[0] == router_logits.shape[0]
         ), f"{input_ids.shape=} {hidden_states.shape=} {router_logits.shape=}"
+
+        if self.moe_load_balancer is not None:
+            router_logits, _ = self.moe_load_balancer.transform_topk_inputs(
+                router_logits,
+                None,
+            )
 
         if envs.SGLANG_OPT_USE_FUSED_HASH_TOPK.get():
             from sglang.jit_kernel.deepseek_v4 import hash_topk
@@ -125,9 +179,13 @@ class HashTopK(nn.Module):
         if is_hip():
             topk_weights = topk_weights.to(torch.float32)
 
-        topk_ids = topk_ids_logical_to_physical(topk_ids, expert_location_dispatch_info)
         _mask_topk_ids_padded_region(topk_ids, num_token_non_padded)
         topk_output = StandardTopKOutput(
             topk_weights=topk_weights, topk_ids=topk_ids, router_logits=router_logits
         )
-        return topk_output
+        return self._apply_moe_load_balancer(
+            topk_output,
+            hidden_states.shape[0],
+            num_token_non_padded=num_token_non_padded,
+            forward_batch=forward_batch,
+        )
