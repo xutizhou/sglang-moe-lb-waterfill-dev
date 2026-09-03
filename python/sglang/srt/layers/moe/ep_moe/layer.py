@@ -256,6 +256,13 @@ class DeepEPMoE(FusedMoE):
             global_physical_ids = lplb_solver.route_decode_metro_global(
                 global_logical_ids
             )
+        from sglang.srt.eplb.expert_distribution import (
+            get_global_expert_distribution_recorder,
+        )
+
+        get_global_expert_distribution_recorder().on_select_experts(
+            global_physical_ids
+        )
         global_topk = StandardTopKOutput(
             topk_weights=global_weights,
             topk_ids=global_physical_ids,

@@ -1984,6 +1984,10 @@ def _post_process_topk_ids(
             # would require log2phy_prob, which this deterministic path neither
             # produces nor needs.
             _mask_topk_ids_padded_region(topk_ids, num_token_non_padded)
+            # Physical replica selection happens later in DeepEPMoE. Avoid
+            # interpreting these logical IDs as physical IDs in the expert
+            # distribution recorder; the layer records the mapped IDs.
+            recorder_topk_ids = torch.full_like(topk_ids, -1)
         elif use_per_rank_shared_slots:
             # Shared experts appended as extra columns in topk_ids: their value
             # would be out-of-bounds for the logical-to-physical dispatch table,

@@ -166,7 +166,7 @@ def test_static_decode_skips_online_lplb(monkeypatch):
         )
     )
     torch.testing.assert_close(gathered_ids, topk_ids)
-    torch.testing.assert_close(recorder_ids, topk_ids)
+    torch.testing.assert_close(recorder_ids, torch.full_like(topk_ids, -1))
     torch.testing.assert_close(gathered_weights, topk_weights)
 
 
