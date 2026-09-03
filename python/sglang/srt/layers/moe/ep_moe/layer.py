@@ -224,6 +224,10 @@ class DeepEPMoE(FusedMoE):
         # metro_allgather deliberately leaves TopK IDs logical.  Replica
         # selection happens once, below, from the global active set.
         logical_ids = topk_output.topk_ids
+        # StandardDispatcher may consume/reshape its input storage in-place.
+        # Preserve the model width before dispatch so the reduce-scatter result
+        # is not sliced with a mutated trailing dimension.
+        hidden_size = hidden_states.shape[-1]
 
         group = get_tp_group()
         sizes = get_dp_global_num_tokens()
@@ -262,7 +266,7 @@ class DeepEPMoE(FusedMoE):
         global_output = self._metro_standard_dispatcher.combine(combine_input)
         local_output = get_local_dp_buffer(group)
         group.reduce_scatterv(global_output, output=local_output, sizes=sizes)
-        return local_output[..., : hidden_states.shape[-1]].contiguous()
+        return local_output[..., :hidden_size].contiguous()
 
     def dispatch(
         self,
