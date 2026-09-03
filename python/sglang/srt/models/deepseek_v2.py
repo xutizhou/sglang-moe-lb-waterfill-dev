@@ -1208,8 +1208,8 @@ class DeepseekV2MoE(nn.Module):
             from sglang.srt.distributed import get_tp_group
             from sglang.srt.layers.dp_attention import get_dp_global_num_tokens
 
-            hidden_states = get_tp_group().all_gatherv(
-                hidden_states, sizes=get_dp_global_num_tokens()
+            (hidden_states,) = get_tp_group().all_gatherv(
+                [hidden_states], sizes=get_dp_global_num_tokens()
             )
 
         shared_output = None
