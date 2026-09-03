@@ -227,10 +227,18 @@ class DeepEPMoE(FusedMoE):
 
         group = get_tp_group()
         sizes = get_dp_global_num_tokens()
-        global_weights, global_logical_ids, global_hidden = group.all_gatherv(
-            [topk_output.topk_weights, logical_ids, hidden_states],
-            sizes=sizes,
-        )
+        if hidden_states.shape[0] == sum(sizes):
+            # The paper path gathers hidden states before top-k in the model
+            # layer, so weights and logical IDs are already global here.
+            global_weights = topk_output.topk_weights
+            global_logical_ids = logical_ids
+            global_hidden = hidden_states
+        else:
+            # Fallback for direct DeepEPMoE callers used by unit tests.
+            global_weights, global_logical_ids, global_hidden = group.all_gatherv(
+                [topk_output.topk_weights, logical_ids, hidden_states],
+                sizes=sizes,
+            )
         global_physical_ids = lplb_solver.route_decode_metro_global(
             global_logical_ids
         )

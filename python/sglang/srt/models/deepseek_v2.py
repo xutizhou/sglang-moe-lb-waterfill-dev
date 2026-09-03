@@ -1197,6 +1197,21 @@ class DeepseekV2MoE(nn.Module):
         forward_batch: ForwardBatch,
         input_ids_global: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        shared_hidden_states = hidden_states
+        metro_allgather_decode = (
+            forward_batch.forward_mode.is_decode()
+            and get_server_args().lplb_decode_load_metric == "metro_allgather"
+        )
+        if metro_allgather_decode:
+            # METRO gathers tokens before top-k so every EP rank computes the
+            # same global routing decisions (paper Figure 7 / Algorithm 1).
+            from sglang.srt.distributed import get_tp_group
+            from sglang.srt.layers.dp_attention import get_dp_global_num_tokens
+
+            hidden_states = get_tp_group().all_gatherv(
+                hidden_states, sizes=get_dp_global_num_tokens()
+            )
+
         shared_output = None
         sbo_enabled_flag = self._fuse_shared_experts_inside_sbo and not self.is_nextn
         sbo_overlap_dispatch_flag = (
@@ -1213,11 +1228,13 @@ class DeepseekV2MoE(nn.Module):
                 if self.alt_stream is not None:
                     self.alt_stream.wait_stream(torch.cuda.current_stream())
                     with torch.cuda.stream(self.alt_stream):
-                        shared_output = self._forward_shared_experts(hidden_states)
+                        shared_output = self._forward_shared_experts(
+                            shared_hidden_states
+                        )
                         shared_output.record_stream(self.alt_stream)
                         shared_event = self.alt_stream.record_event()
                 else:
-                    shared_output = self._forward_shared_experts(hidden_states)
+                    shared_output = self._forward_shared_experts(shared_hidden_states)
             topk_kwargs = (
                 {"input_ids": input_ids_global}
                 if getattr(self, "is_hash", False)
@@ -1226,7 +1243,11 @@ class DeepseekV2MoE(nn.Module):
             topk_output = self.topk(
                 hidden_states,
                 router_logits,
-                num_token_non_padded=forward_batch.num_token_non_padded,
+                num_token_non_padded=(
+                    None
+                    if metro_allgather_decode
+                    else forward_batch.num_token_non_padded
+                ),
                 is_decode=forward_batch.forward_mode.is_decode(),
                 expert_location_dispatch_info=(
                     ExpertLocationDispatchInfo.init_new(
@@ -1249,7 +1270,7 @@ class DeepseekV2MoE(nn.Module):
 
             def _deepep_dispatch_hook(dispatcher: BaseDispatcher):
                 nonlocal shared_output
-                shared_output = self._forward_shared_experts(hidden_states)
+                shared_output = self._forward_shared_experts(shared_hidden_states)
                 for handle in deepep_dispatch_hook_handle:
                     handle.remove()
 
@@ -1325,7 +1346,7 @@ class DeepseekV2MoE(nn.Module):
                 with deep_gemm_wrapper.configure_deep_gemm_num_sms(
                     dispatcher.meta_overlap_args["compute_num_sms"]
                 ):
-                    shared_output = self._forward_shared_experts(hidden_states)
+                    shared_output = self._forward_shared_experts(shared_hidden_states)
 
                 pre_combine_hook_handle.remove()
 
@@ -1398,7 +1419,7 @@ class DeepseekV2MoE(nn.Module):
         )
 
         if (
-            hidden_states.shape[0] > 0
+            shared_hidden_states.shape[0] > 0
             and not sbo_enabled_flag
             and self.num_fused_shared_experts == 0
             and self.alt_stream is not None
