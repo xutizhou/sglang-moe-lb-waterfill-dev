@@ -2251,6 +2251,7 @@ class ServerArgs:
             "tokens",
             "metro",
             "metro_allgather",
+            "static_allgather",
             "active_experts",
             "active_experts_prior",
             "static",
@@ -2258,7 +2259,9 @@ class ServerArgs:
         "Decode policy used with --ep-dispatch-algorithm=lp. 'tokens' runs "
         "the regular token-count LPLB solver, 'metro' reproduces the paper's "
         "greedy current-active-expert assignment, 'metro_allgather' also replaces "
-        "dispatch with all-gather as in the paper, 'active_experts' exactly minimizes the "
+        "dispatch with all-gather as in the paper, 'static_allgather' uses the same "
+        "transport with the initialized fixed replica map as an algorithm-control "
+        "baseline, 'active_experts' exactly minimizes the "
         "maximum number of activated experts per rank using a compact GPU P2P "
         "active-set exchange, 'active_experts_prior' uses one globally "
         "consistent all-active assignment without decode communication, and "

@@ -1198,13 +1198,14 @@ class DeepseekV2MoE(nn.Module):
         input_ids_global: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         shared_hidden_states = hidden_states
-        metro_allgather_decode = (
+        allgather_decode = (
             forward_batch.forward_mode.is_decode()
-            and get_server_args().lplb_decode_load_metric == "metro_allgather"
+            and get_server_args().lplb_decode_load_metric
+            in ("metro_allgather", "static_allgather")
         )
-        if metro_allgather_decode:
-            # METRO gathers tokens before top-k so every EP rank computes the
-            # same global routing decisions (paper Figure 7 / Algorithm 1).
+        if allgather_decode:
+            # Gather tokens before top-k so every EP rank computes routing from
+            # the same global expert selections (paper Figure 7 / Algorithm 1).
             from sglang.srt.distributed import get_tp_group
             from sglang.srt.layers.dp_attention import get_dp_global_num_tokens
 
@@ -1245,7 +1246,7 @@ class DeepseekV2MoE(nn.Module):
                 router_logits,
                 num_token_non_padded=(
                     None
-                    if metro_allgather_decode
+                    if allgather_decode
                     else forward_batch.num_token_non_padded
                 ),
                 is_decode=forward_batch.forward_mode.is_decode(),

@@ -131,20 +131,23 @@ def test_static_decode_skips_online_lplb(monkeypatch):
         fused_shared_experts_scaling_factor=None,
     )
 
-    physical_ids, actual_weights, recorder_ids = topk_module._post_process_topk_ids(
-        topk_ids,
-        topk_weights,
-        config,
-        router_logits=torch.empty((2, 3)),
-        layer_id=0,
-        expert_location_dispatch_info=info,
-        lplb_decode_load_metric="static",
-    )
-
     expected = torch.tensor([[4, 6], [1, 4]], dtype=torch.int32)
-    torch.testing.assert_close(physical_ids, expected)
-    torch.testing.assert_close(recorder_ids, expected)
-    torch.testing.assert_close(actual_weights, topk_weights)
+    for policy in ("static", "static_allgather"):
+        physical_ids, actual_weights, recorder_ids = (
+            topk_module._post_process_topk_ids(
+                topk_ids.clone(),
+                topk_weights.clone(),
+                config,
+                router_logits=torch.empty((2, 3)),
+                layer_id=0,
+                expert_location_dispatch_info=info,
+                lplb_decode_load_metric=policy,
+            )
+        )
+
+        torch.testing.assert_close(physical_ids, expected)
+        torch.testing.assert_close(recorder_ids, expected)
+        torch.testing.assert_close(actual_weights, topk_weights)
 
 
 def test_empty_decode_participation_matches_policy(monkeypatch):
@@ -185,6 +188,7 @@ def test_empty_decode_participation_matches_policy(monkeypatch):
         ("active_experts", "active_experts"),
         ("metro", "metro"),
         ("metro_allgather", "metro_allgather"),
+        ("static_allgather", "metro_allgather"),
         ("active_experts_prior", "active_experts_prior"),
         ("static", None),
     ):

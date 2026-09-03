@@ -653,6 +653,7 @@ class TopK(MultiPlatformOp):
                         "active_experts",
                         "metro",
                         "metro_allgather",
+                        "static_allgather",
                         "active_experts_prior",
                         "static",
                     )
@@ -661,7 +662,8 @@ class TopK(MultiPlatformOp):
                     lplb_solver.solve_decode_metro(empty_topk_ids)
                 elif (
                     bool(is_decode)
-                    and self.lplb_decode_load_metric == "metro_allgather"
+                    and self.lplb_decode_load_metric
+                    in ("metro_allgather", "static_allgather")
                 ):
                     lplb_solver.mark_metro_allgather_decode()
                 elif (
@@ -1918,7 +1920,7 @@ def _post_process_topk_ids(
             == "lp"
             and lplb_decode_load_metric != "static"
         ):
-            if lplb_decode_load_metric == "metro_allgather":
+            if lplb_decode_load_metric in ("metro_allgather", "static_allgather"):
                 from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
 
                 lplb_solver = get_global_lplb_solver(layer_id)
@@ -1954,7 +1956,7 @@ def _post_process_topk_ids(
                     log2phy_prob = lplb_solver.solve(topk_ids)
 
         use_static_lplb_decode = (
-            lplb_decode_load_metric == "static"
+            lplb_decode_load_metric in ("static", "static_allgather")
             and expert_location_dispatch_info is not None
             and expert_location_dispatch_info.ep_dispatch_algorithm == "lp"
         )

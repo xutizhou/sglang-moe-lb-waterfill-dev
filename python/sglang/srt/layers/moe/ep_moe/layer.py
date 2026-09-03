@@ -243,9 +243,15 @@ class DeepEPMoE(FusedMoE):
                 [topk_output.topk_weights, logical_ids, hidden_states],
                 sizes=sizes,
             )
-        global_physical_ids = lplb_solver.route_decode_metro_global(
-            global_logical_ids
-        )
+        from sglang.srt.runtime_context import get_server_args
+
+        if get_server_args().lplb_decode_load_metric == "static_allgather":
+            # TopK already applied the initialized logical-to-physical map.
+            global_physical_ids = global_logical_ids
+        else:
+            global_physical_ids = lplb_solver.route_decode_metro_global(
+                global_logical_ids
+            )
         global_topk = StandardTopKOutput(
             topk_weights=global_weights,
             topk_ids=global_physical_ids,
