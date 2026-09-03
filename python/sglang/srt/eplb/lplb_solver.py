@@ -112,6 +112,8 @@ class LPLBSolver:
         self.num_logical = log2phy.shape[0]
         self.max_copies = log2phy.shape[1]
         self.num_phy = phy2log.shape[0]
+        self.phy2log = phy2log.to(torch.int64).contiguous()
+        self._metro_allgather_pending = False
         # B1/B2 GPU-assignment matrices below assume each rank owns a
         # contiguous block of num_phy // num_gpus physical experts.
         if self.num_phy % num_gpus != 0:
@@ -408,6 +410,36 @@ class LPLBSolver:
         from sglang.kernels.ops.lplb.cuda_solver import dispatch_decode_metro
 
         global_counts = self._count_and_all_reduce(topk_ids)
+        return dispatch_decode_metro(
+            topk_ids,
+            global_counts,
+            self.decode_physical_by_rank,
+            self.decode_rank_mask,
+            self.decode_log_replicated,
+        )
+
+    def mark_metro_allgather_decode(self) -> None:
+        self._metro_allgather_pending = True
+
+    def consume_metro_allgather_decode(self) -> bool:
+        pending = self._metro_allgather_pending
+        self._metro_allgather_pending = False
+        return pending
+
+    def route_decode_metro_global(self, topk_ids: torch.Tensor) -> torch.Tensor:
+        """Route an already-global TopK without another collective."""
+        from sglang.kernels.ops.lplb.cuda_solver import dispatch_decode_metro
+
+        global_counts = torch.zeros(
+            self.num_logical, dtype=torch.float32, device=topk_ids.device
+        )
+        flat = topk_ids.flatten().to(torch.int64)
+        if flat.numel() > 0:
+            global_counts.scatter_add_(
+                0,
+                flat,
+                torch.ones_like(flat, dtype=torch.float32),
+            )
         return dispatch_decode_metro(
             topk_ids,
             global_counts,

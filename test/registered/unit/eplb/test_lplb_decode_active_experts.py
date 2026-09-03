@@ -158,6 +158,9 @@ def test_empty_decode_participation_matches_policy(monkeypatch):
             ("metro", tuple(ids.shape))
         ),
         solve_decode_metro=lambda ids: calls.append(("metro", tuple(ids.shape))),
+        mark_metro_allgather_decode=lambda: calls.append(
+            ("metro_allgather", (0, 2))
+        ),
         solve_decode_all_active=lambda ids: calls.append(
             ("active_experts_prior", tuple(ids.shape))
         ),
@@ -181,6 +184,7 @@ def test_empty_decode_participation_matches_policy(monkeypatch):
         ("tokens", "tokens"),
         ("active_experts", "active_experts"),
         ("metro", "metro"),
+        ("metro_allgather", "metro_allgather"),
         ("active_experts_prior", "active_experts_prior"),
         ("static", None),
     ):

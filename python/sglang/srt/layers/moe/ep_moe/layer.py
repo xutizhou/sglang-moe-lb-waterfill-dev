@@ -180,6 +180,17 @@ class DeepEPMoE(FusedMoE):
         topk_output: TopKOutput,
     ):
 
+        from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
+
+        lplb_solver = get_global_lplb_solver(self.layer_id)
+        if (
+            lplb_solver is not None
+            and lplb_solver.consume_metro_allgather_decode()
+        ):
+            return self._forward_metro_allgather(
+                hidden_states, topk_output, lplb_solver
+            )
+
         if self.deprecate_flag:
             return super().forward_impl(
                 hidden_states,
@@ -191,6 +202,64 @@ class DeepEPMoE(FusedMoE):
         )
         combine_input = self.run_moe_core(dispatch_output)
         return self.dispatcher.combine(combine_input=combine_input)
+
+    def _forward_metro_allgather(
+        self,
+        hidden_states: torch.Tensor,
+        topk_output: TopKOutput,
+        lplb_solver,
+    ) -> torch.Tensor:
+        """Paper path: all-gather inputs, local experts, reduce-scatter output."""
+        from sglang.srt.distributed import get_tp_group
+        from sglang.srt.layers.dp_attention import (
+            get_dp_global_num_tokens,
+            get_local_dp_buffer,
+        )
+        from sglang.srt.layers.moe.token_dispatcher.standard import (
+            StandardDispatcher,
+        )
+        from sglang.srt.layers.moe.topk import StandardTopKOutput
+
+        assert TopKOutputChecker.format_is_standard(topk_output)
+        physical_ids = topk_output.topk_ids
+        valid = physical_ids >= 0
+        safe_physical = physical_ids.clamp(min=0).to(torch.int64)
+        logical_ids = torch.where(
+            valid,
+            lplb_solver.phy2log[safe_physical].to(physical_ids.dtype),
+            physical_ids,
+        )
+
+        group = get_tp_group()
+        sizes = get_dp_global_num_tokens()
+        global_weights, global_logical_ids, global_hidden = group.all_gatherv(
+            [topk_output.topk_weights, logical_ids, hidden_states],
+            sizes=sizes,
+        )
+        global_physical_ids = lplb_solver.route_decode_metro_global(
+            global_logical_ids
+        )
+        global_topk = StandardTopKOutput(
+            topk_weights=global_weights,
+            topk_ids=global_physical_ids,
+            router_logits=topk_output.router_logits,
+        )
+
+        if not hasattr(self, "_metro_standard_dispatcher"):
+            self._metro_standard_dispatcher = StandardDispatcher(
+                self.moe_runner_config
+            )
+        dispatch_output = self._metro_standard_dispatcher.dispatch(
+            global_hidden, global_topk
+        )
+        combine_input = self.quant_method.apply(
+            layer=self,
+            dispatch_output=dispatch_output,
+        )
+        global_output = self._metro_standard_dispatcher.combine(combine_input)
+        local_output = get_local_dp_buffer(group)
+        group.reduce_scatterv(global_output, output=local_output, sizes=sizes)
+        return local_output[..., : hidden_states.shape[-1]].contiguous()
 
     def dispatch(
         self,
