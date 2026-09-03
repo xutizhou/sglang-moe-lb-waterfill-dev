@@ -277,9 +277,14 @@ def _dispatch_decode_integral_module(
         cuda_files=["lplb/dispatch_decode_integral.cuh"],
         cuda_wrappers=[
             ("dispatch_decode_integral", f"dispatch_decode_integral<{args}>"),
+            ("dispatch_decode_metro", f"dispatch_decode_metro<{args}>"),
             (
                 "dispatch_decode_integral_p2p",
                 f"dispatch_decode_integral_p2p<{args}>",
+            ),
+            (
+                "dispatch_decode_metro_p2p",
+                f"dispatch_decode_metro_p2p<{args}>",
             ),
         ],
     )
@@ -380,6 +385,47 @@ def dispatch_decode_integral_p2p(
     return out.view(original_shape).to(topk_ids.dtype)
 
 
+def dispatch_decode_metro(
+    topk_ids: torch.Tensor,
+    global_counts: torch.Tensor,
+    physical_by_rank: torch.Tensor,
+    rank_mask: torch.Tensor,
+    replicated_logical: torch.Tensor,
+) -> torch.Tensor:
+    """Apply METRO to an already-global active set in one CUDA launch."""
+    if not topk_ids.is_cuda:
+        raise RuntimeError(
+            "METRO decode dispatch requires CUDA tensors; got topk_ids on "
+            f"{topk_ids.device}."
+        )
+    original_shape = topk_ids.shape
+    flat_ids = topk_ids.reshape(-1).contiguous().to(torch.int32)
+    num_logical, num_gpus = physical_by_rank.shape
+    assert global_counts.shape == (num_logical,)
+    assert global_counts.dtype == torch.float32
+    assert physical_by_rank.dtype == torch.int32
+    assert rank_mask.shape == (num_logical,)
+    assert rank_mask.dtype == torch.int32
+    assert replicated_logical.dtype == torch.int32
+
+    out = torch.empty(flat_ids.shape[0], dtype=torch.int32, device=topk_ids.device)
+    module = _dispatch_decode_integral_module(
+        num_logical,
+        num_gpus,
+        replicated_logical.shape[0],
+        DISPATCH_BLOCK_DIM,
+    )
+    module.dispatch_decode_metro(
+        out,
+        flat_ids,
+        global_counts,
+        physical_by_rank,
+        rank_mask,
+        replicated_logical,
+    )
+    return out.view(original_shape).to(topk_ids.dtype)
+
+
 def warmup_dispatch_decode_integral(
     num_logical: int,
     num_gpus: int,
@@ -392,6 +438,58 @@ def warmup_dispatch_decode_integral(
         num_replicated,
         DISPATCH_BLOCK_DIM,
     )
+
+
+def dispatch_decode_metro_p2p(
+    topk_ids: torch.Tensor,
+    physical_by_rank: torch.Tensor,
+    rank_mask: torch.Tensor,
+    replicated_logical: torch.Tensor,
+    *,
+    local_active: torch.Tensor,
+    active_ptrs_dev: int,
+    flag_ptrs_dev: int,
+    barrier_state: torch.Tensor,
+    rank: int,
+) -> torch.Tensor:
+    """Gather the current active set and apply METRO Algorithm 1."""
+    if not topk_ids.is_cuda:
+        raise RuntimeError(
+            "METRO decode dispatch requires CUDA tensors; got topk_ids on "
+            f"{topk_ids.device}."
+        )
+    original_shape = topk_ids.shape
+    flat_ids = topk_ids.reshape(-1).contiguous().to(torch.int32)
+    num_logical, num_gpus = physical_by_rank.shape
+    active_words = (num_logical + 31) // 32
+    assert local_active.shape == (active_words,)
+    assert local_active.dtype == torch.uint32
+    assert physical_by_rank.dtype == torch.int32
+    assert rank_mask.shape == (num_logical,)
+    assert rank_mask.dtype == torch.int32
+    assert replicated_logical.dtype == torch.int32
+    assert barrier_state.dtype == torch.uint32
+
+    out = torch.empty(flat_ids.shape[0], dtype=torch.int32, device=topk_ids.device)
+    module = _dispatch_decode_integral_module(
+        num_logical,
+        num_gpus,
+        replicated_logical.shape[0],
+        DISPATCH_BLOCK_DIM,
+    )
+    module.dispatch_decode_metro_p2p(
+        out,
+        flat_ids,
+        local_active,
+        physical_by_rank,
+        rank_mask,
+        replicated_logical,
+        active_ptrs_dev,
+        flag_ptrs_dev,
+        barrier_state.data_ptr(),
+        rank,
+    )
+    return out.view(original_shape).to(topk_ids.dtype)
 
 
 def dispatch_decode_integral_torch_reference(

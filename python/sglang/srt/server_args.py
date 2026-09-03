@@ -2249,12 +2249,14 @@ class ServerArgs:
     lplb_decode_load_metric: A[
         Literal[
             "tokens",
+            "metro",
             "active_experts",
             "active_experts_prior",
             "static",
         ],
         "Decode policy used with --ep-dispatch-algorithm=lp. 'tokens' runs "
-        "the regular token-count LPLB solver, 'active_experts' minimizes the "
+        "the regular token-count LPLB solver, 'metro' reproduces the paper's "
+        "greedy current-active-expert assignment, 'active_experts' exactly minimizes the "
         "maximum number of activated experts per rank using a compact GPU P2P "
         "active-set exchange, 'active_experts_prior' uses one globally "
         "consistent all-active assignment without decode communication, and "

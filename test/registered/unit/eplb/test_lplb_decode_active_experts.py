@@ -7,6 +7,7 @@ import torch
 from sglang.kernels.ops.lplb.cuda_solver import (
     dispatch_decode_integral,
     dispatch_decode_integral_torch_reference,
+    dispatch_decode_metro,
 )
 from sglang.srt.eplb.expert_location_dispatch import ExpertLocationDispatchInfo
 from sglang.srt.eplb.lplb_solver import LPLBSolver
@@ -153,6 +154,10 @@ def test_empty_decode_participation_matches_policy(monkeypatch):
         solve_decode_active_experts_p2p=lambda ids: calls.append(
             ("active_experts", tuple(ids.shape))
         ),
+        solve_decode_metro_p2p=lambda ids: calls.append(
+            ("metro", tuple(ids.shape))
+        ),
+        solve_decode_metro=lambda ids: calls.append(("metro", tuple(ids.shape))),
         solve_decode_all_active=lambda ids: calls.append(
             ("active_experts_prior", tuple(ids.shape))
         ),
@@ -175,6 +180,7 @@ def test_empty_decode_participation_matches_policy(monkeypatch):
     for policy, expected in (
         ("tokens", "tokens"),
         ("active_experts", "active_experts"),
+        ("metro", "metro"),
         ("active_experts_prior", "active_experts_prior"),
         ("static", None),
     ):
@@ -252,6 +258,40 @@ def test_decode_integral_cuda_matches_torch_reference():
     )
 
     torch.testing.assert_close(actual, expected)
+
+
+def test_decode_metro_cuda_routes_each_active_expert_once():
+    if not torch.cuda.is_available():
+        return
+    topk_ids, global_counts, log2phy_map = _integral_decode_case("cuda")
+    physical_by_rank, rank_mask, replicated_logical = _compact_decode_map(
+        log2phy_map,
+        num_physical=12,
+        num_gpus=4,
+    )
+
+    physical_ids = dispatch_decode_metro(
+        topk_ids,
+        global_counts,
+        physical_by_rank,
+        rank_mask,
+        replicated_logical,
+    )
+
+    torch.testing.assert_close(
+        physical_ids,
+        torch.tensor(
+            [[1, 1, 2, 0], [7, 5, 3, 6], [2, 7, 1, 9]],
+            dtype=torch.int32,
+            device="cuda",
+        ),
+    )
+    active_load = [0, 0, 0, 0]
+    for logical in topk_ids.unique():
+        routed = physical_ids[topk_ids == logical]
+        assert routed.unique().numel() == 1
+        active_load[int(routed[0]) // 3] += 1
+    assert active_load == [3, 2, 2, 1]
 
 
 def test_decode_all_active_prior_is_precomputed_and_consistent(monkeypatch):

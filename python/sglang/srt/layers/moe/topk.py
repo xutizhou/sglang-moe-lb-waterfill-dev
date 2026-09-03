@@ -651,11 +651,17 @@ class TopK(MultiPlatformOp):
                     self.lplb_decode_load_metric
                     in (
                         "active_experts",
+                        "metro",
                         "active_experts_prior",
                         "static",
                     )
                 )
-                if bool(is_decode) and self.lplb_decode_load_metric == "active_experts":
+                if bool(is_decode) and self.lplb_decode_load_metric == "metro":
+                    lplb_solver.solve_decode_metro(empty_topk_ids)
+                elif (
+                    bool(is_decode)
+                    and self.lplb_decode_load_metric == "active_experts"
+                ):
                     lplb_solver.solve_decode_active_experts_p2p(empty_topk_ids)
                 elif (
                     bool(is_decode)
@@ -1906,7 +1912,13 @@ def _post_process_topk_ids(
             == "lp"
             and lplb_decode_load_metric != "static"
         ):
-            if lplb_decode_load_metric == "active_experts":
+            if lplb_decode_load_metric == "metro":
+                from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
+
+                lplb_solver = get_global_lplb_solver(layer_id)
+                if lplb_solver is not None:
+                    lplb_physical_topk_ids = lplb_solver.solve_decode_metro(topk_ids)
+            elif lplb_decode_load_metric == "active_experts":
                 from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
 
                 lplb_solver = get_global_lplb_solver(layer_id)

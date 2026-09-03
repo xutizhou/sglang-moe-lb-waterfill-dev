@@ -380,6 +380,42 @@ class LPLBSolver:
             rank=self.ep_group.rank_in_group,
         )
 
+    def solve_decode_metro_p2p(self, topk_ids: torch.Tensor) -> torch.Tensor:
+        """Union the current active set and apply METRO's greedy assignment."""
+        if self._decode_p2p_resources is None:
+            raise RuntimeError(
+                "P2P decode METRO resources were not initialized at model setup."
+            )
+        from sglang.kernels.ops.lplb.cuda_solver import dispatch_decode_metro_p2p
+
+        local_active, _, barrier_state, active_handle, flag_handle = (
+            self._decode_p2p_resources
+        )
+        return dispatch_decode_metro_p2p(
+            topk_ids,
+            self.decode_physical_by_rank,
+            self.decode_rank_mask,
+            self.decode_log_replicated,
+            local_active=local_active,
+            active_ptrs_dev=active_handle.buffer_ptrs_dev,
+            flag_ptrs_dev=flag_handle.buffer_ptrs_dev,
+            barrier_state=barrier_state,
+            rank=self.ep_group.rank_in_group,
+        )
+
+    def solve_decode_metro(self, topk_ids: torch.Tensor) -> torch.Tensor:
+        """All-reduce the current active set and apply METRO Algorithm 1."""
+        from sglang.kernels.ops.lplb.cuda_solver import dispatch_decode_metro
+
+        global_counts = self._count_and_all_reduce(topk_ids)
+        return dispatch_decode_metro(
+            topk_ids,
+            global_counts,
+            self.decode_physical_by_rank,
+            self.decode_rank_mask,
+            self.decode_log_replicated,
+        )
+
     def solve_decode_all_active(self, topk_ids: torch.Tensor) -> torch.Tensor:
         """Map decode routes through the precomputed all-active assignment."""
         if self._decode_all_active_physical is None:
