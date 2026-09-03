@@ -432,21 +432,12 @@ class LPLBSolver:
 
     def route_decode_metro_global(self, topk_ids: torch.Tensor) -> torch.Tensor:
         """Route an already-global TopK without another collective."""
-        from sglang.kernels.ops.lplb.cuda_solver import dispatch_decode_metro
-
-        global_counts = torch.zeros(
-            self.num_logical, dtype=torch.float32, device=topk_ids.device
+        from sglang.kernels.ops.lplb.cuda_solver import (
+            dispatch_decode_metro_global,
         )
-        flat = topk_ids.flatten().to(torch.int64)
-        if flat.numel() > 0:
-            global_counts.scatter_add_(
-                0,
-                flat,
-                torch.ones_like(flat, dtype=torch.float32),
-            )
-        return dispatch_decode_metro(
+
+        return dispatch_decode_metro_global(
             topk_ids,
-            global_counts,
             self.decode_physical_by_rank,
             self.decode_rank_mask,
             self.decode_log_replicated,

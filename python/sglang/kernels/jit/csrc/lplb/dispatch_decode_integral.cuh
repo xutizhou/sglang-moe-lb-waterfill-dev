@@ -36,7 +36,8 @@ template <
     int NUM_REPLICATED,
     int BLOCK_DIM,
     bool GATHER_P2P,
-    bool METRO_GREEDY>
+    bool METRO_GREEDY,
+    bool COUNT_GLOBAL_INPUT>
 __global__ void dispatch_decode_integral_kernel(
     int32_t* __restrict__ out_topk_ids,
     const int32_t* __restrict__ in_topk_ids,
@@ -59,7 +60,7 @@ __global__ void dispatch_decode_integral_kernel(
   __shared__ uint32_t global_active[ACTIVE_WORDS];
 
   for (int logical = threadIdx.x; logical < NUM_LOGICAL; logical += BLOCK_DIM) {
-    if constexpr (GATHER_P2P) {
+    if constexpr (GATHER_P2P || COUNT_GLOBAL_INPUT) {
       logical_counts[logical] = 0;
     } else {
       logical_counts[logical] = static_cast<int>(global_counts[logical]);
@@ -70,6 +71,17 @@ __global__ void dispatch_decode_integral_kernel(
     fixed_token_load[threadIdx.x] = 0;
   }
   __syncthreads();
+
+  if constexpr (COUNT_GLOBAL_INPUT) {
+    // The all-gather path already supplies every token on every rank. Count
+    // active logical experts in this kernel instead of launching fill,
+    // scatter-add, and dtype-conversion kernels from Python.
+    for (int idx = threadIdx.x; idx < N; idx += BLOCK_DIM) {
+      const int logical = in_topk_ids[idx];
+      if (logical >= 0) atomicAdd(logical_counts + logical, 1);
+    }
+    __syncthreads();
+  }
 
   if constexpr (GATHER_P2P) {
     auto* local_active = static_cast<uint32_t*>(active_ptrs[rank]);
@@ -312,7 +324,7 @@ void dispatch_decode_integral(
 
   const DLDevice device = device_.unwrap();
   auto kernel = dispatch_decode_integral_kernel<
-      NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, false, false>;
+      NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, false, false, false>;
   LaunchKernel(/*grid=*/1, /*block=*/BLOCK_DIM, device)(
       kernel,
       static_cast<int32_t*>(out_topk_ids.data_ptr()),
@@ -353,12 +365,50 @@ void dispatch_decode_metro(
 
   const DLDevice device = device_.unwrap();
   auto kernel = dispatch_decode_integral_kernel<
-      NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, false, true>;
+      NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, false, true, false>;
   LaunchKernel(/*grid=*/1, /*block=*/BLOCK_DIM, device)(
       kernel,
       static_cast<int32_t*>(out_topk_ids.data_ptr()),
       static_cast<const int32_t*>(in_topk_ids.data_ptr()),
       static_cast<const float*>(global_counts.data_ptr()),
+      static_cast<const int32_t*>(physical_by_rank.data_ptr()),
+      static_cast<const int32_t*>(rank_mask.data_ptr()),
+      static_cast<const int32_t*>(replicated_logical.data_ptr()),
+      static_cast<int>(N.unwrap()),
+      nullptr,
+      nullptr,
+      nullptr,
+      0u);
+}
+
+template <int NUM_LOGICAL, int NUM_GPUS, int NUM_REPLICATED, int BLOCK_DIM>
+void dispatch_decode_metro_global(
+    tvm::ffi::TensorView out_topk_ids,
+    tvm::ffi::TensorView in_topk_ids,
+    tvm::ffi::TensorView physical_by_rank,
+    tvm::ffi::TensorView rank_mask,
+    tvm::ffi::TensorView replicated_logical) {
+  using namespace host;
+
+  SymbolicSize N{"num_topk_entries"};
+  SymbolicDevice device_;
+  TensorMatcher({N}).with_dtype<int32_t>().with_device<kDLCUDA>(device_)
+      .verify(out_topk_ids).verify(in_topk_ids);
+  TensorMatcher({NUM_LOGICAL, NUM_GPUS}).with_dtype<int32_t>()
+      .with_device<kDLCUDA>(device_).verify(physical_by_rank);
+  TensorMatcher({NUM_LOGICAL}).with_dtype<int32_t>().with_device<kDLCUDA>(device_)
+      .verify(rank_mask);
+  TensorMatcher({NUM_REPLICATED}).with_dtype<int32_t>().with_device<kDLCUDA>(device_)
+      .verify(replicated_logical);
+
+  const DLDevice device = device_.unwrap();
+  auto kernel = dispatch_decode_integral_kernel<
+      NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, false, true, true>;
+  LaunchKernel(/*grid=*/1, /*block=*/BLOCK_DIM, device)(
+      kernel,
+      static_cast<int32_t*>(out_topk_ids.data_ptr()),
+      static_cast<const int32_t*>(in_topk_ids.data_ptr()),
+      nullptr,
       static_cast<const int32_t*>(physical_by_rank.data_ptr()),
       static_cast<const int32_t*>(rank_mask.data_ptr()),
       static_cast<const int32_t*>(replicated_logical.data_ptr()),
@@ -399,7 +449,7 @@ void dispatch_decode_integral_p2p(
 
   const DLDevice device = device_.unwrap();
   auto kernel = dispatch_decode_integral_kernel<
-      NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, true, false>;
+      NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, true, false, false>;
   LaunchKernel(/*grid=*/1, /*block=*/BLOCK_DIM, device)(
       kernel,
       static_cast<int32_t*>(out_topk_ids.data_ptr()),
@@ -449,7 +499,7 @@ void dispatch_decode_metro_p2p(
 
   const DLDevice device = device_.unwrap();
   auto kernel = dispatch_decode_integral_kernel<
-      NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, true, true>;
+      NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, true, true, false>;
   LaunchKernel(/*grid=*/1, /*block=*/BLOCK_DIM, device)(
       kernel,
       static_cast<int32_t*>(out_topk_ids.data_ptr()),

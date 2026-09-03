@@ -8,6 +8,7 @@ from sglang.kernels.ops.lplb.cuda_solver import (
     dispatch_decode_integral,
     dispatch_decode_integral_torch_reference,
     dispatch_decode_metro,
+    dispatch_decode_metro_global,
 )
 from sglang.srt.eplb.expert_location_dispatch import ExpertLocationDispatchInfo
 from sglang.srt.eplb.lplb_solver import LPLBSolver
@@ -304,6 +305,14 @@ def test_decode_metro_cuda_routes_each_active_expert_once():
         rank_mask,
         replicated_logical,
     )
+    physical_ids_fused = dispatch_decode_metro_global(
+        topk_ids,
+        physical_by_rank,
+        rank_mask,
+        replicated_logical,
+    )
+
+    torch.testing.assert_close(physical_ids_fused, physical_ids)
 
     torch.testing.assert_close(
         physical_ids,
