@@ -221,14 +221,9 @@ class DeepEPMoE(FusedMoE):
         from sglang.srt.layers.moe.topk import StandardTopKOutput
 
         assert TopKOutputChecker.format_is_standard(topk_output)
-        physical_ids = topk_output.topk_ids
-        valid = physical_ids >= 0
-        safe_physical = physical_ids.clamp(min=0).to(torch.int64)
-        logical_ids = torch.where(
-            valid,
-            lplb_solver.phy2log[safe_physical].to(physical_ids.dtype),
-            physical_ids,
-        )
+        # metro_allgather deliberately leaves TopK IDs logical.  Replica
+        # selection happens once, below, from the global active set.
+        logical_ids = topk_output.topk_ids
 
         group = get_tp_group()
         sizes = get_dp_global_num_tokens()
