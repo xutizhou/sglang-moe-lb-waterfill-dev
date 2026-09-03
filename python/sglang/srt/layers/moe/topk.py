@@ -1973,6 +1973,15 @@ def _post_process_topk_ids(
                 log2phy_prob,
             )
             _mask_topk_ids_padded_region(topk_ids, num_token_non_padded)
+        elif lplb_decode_load_metric == "metro_allgather":
+            # The paper-faithful METRO path first all-gathers hidden states and
+            # logical routing decisions, then assigns one replica per active
+            # logical expert from the global active set.  Keep IDs logical here;
+            # DeepEPMoE._forward_metro_allgather performs the physical mapping
+            # after the collective.  Falling through to the regular LP remap
+            # would require log2phy_prob, which this deterministic path neither
+            # produces nor needs.
+            _mask_topk_ids_padded_region(topk_ids, num_token_non_padded)
         elif use_per_rank_shared_slots:
             # Shared experts appended as extra columns in topk_ids: their value
             # would be out-of-bounds for the logical-to-physical dispatch table,
