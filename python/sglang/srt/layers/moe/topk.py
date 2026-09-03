@@ -1956,7 +1956,7 @@ def _post_process_topk_ids(
                     log2phy_prob = lplb_solver.solve(topk_ids)
 
         use_static_lplb_decode = (
-            lplb_decode_load_metric in ("static", "static_allgather")
+            lplb_decode_load_metric == "static"
             and expert_location_dispatch_info is not None
             and expert_location_dispatch_info.ep_dispatch_algorithm == "lp"
         )
@@ -1975,7 +1975,7 @@ def _post_process_topk_ids(
                 log2phy_prob,
             )
             _mask_topk_ids_padded_region(topk_ids, num_token_non_padded)
-        elif lplb_decode_load_metric == "metro_allgather":
+        elif lplb_decode_load_metric in ("metro_allgather", "static_allgather"):
             # The paper-faithful METRO path first all-gathers hidden states and
             # logical routing decisions, then assigns one replica per active
             # logical expert from the global active set.  Keep IDs logical here;

@@ -246,8 +246,12 @@ class DeepEPMoE(FusedMoE):
         from sglang.srt.runtime_context import get_server_args
 
         if get_server_args().lplb_decode_load_metric == "static_allgather":
-            # TopK already applied the initialized logical-to-physical map.
-            global_physical_ids = global_logical_ids
+            # Use one globally consistent initialized replica per logical
+            # expert. Unlike the regular rank-local static dispatch map, this
+            # assigns every token of an expert to exactly one physical copy.
+            global_physical_ids = lplb_solver.decode_static_physical[
+                global_logical_ids.to(torch.int64)
+            ]
         else:
             global_physical_ids = lplb_solver.route_decode_metro_global(
                 global_logical_ids

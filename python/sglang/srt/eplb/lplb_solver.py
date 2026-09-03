@@ -207,6 +207,10 @@ class LPLBSolver:
             raise ValueError(
                 "Every logical expert must have at least one physical copy."
             )
+        # A deterministic, globally consistent no-balancing control for the
+        # all-gather transport. Column zero is always a valid initialized
+        # replica because log2phy stores replicas densely before -1 padding.
+        self.decode_static_physical = self.log2phy[:, 0].to(torch.int32).contiguous()
         self.decode_rank_mask = torch.zeros(
             self.num_logical, dtype=torch.int32, device=device
         )

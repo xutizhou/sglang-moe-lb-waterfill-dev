@@ -106,6 +106,10 @@ def test_decode_compaction_counts_distinct_ranks(monkeypatch):
         solver.decode_log_replicated,
         torch.tensor([0], dtype=torch.int32),
     )
+    torch.testing.assert_close(
+        solver.decode_static_physical,
+        torch.tensor([0, 2], dtype=torch.int32),
+    )
 
 
 def test_static_decode_skips_online_lplb(monkeypatch):
@@ -132,7 +136,7 @@ def test_static_decode_skips_online_lplb(monkeypatch):
     )
 
     expected = torch.tensor([[4, 6], [1, 4]], dtype=torch.int32)
-    for policy in ("static", "static_allgather"):
+    for policy in ("static",):
         physical_ids, actual_weights, recorder_ids = (
             topk_module._post_process_topk_ids(
                 topk_ids.clone(),
@@ -148,6 +152,21 @@ def test_static_decode_skips_online_lplb(monkeypatch):
         torch.testing.assert_close(physical_ids, expected)
         torch.testing.assert_close(recorder_ids, expected)
         torch.testing.assert_close(actual_weights, topk_weights)
+
+    gathered_ids, gathered_weights, recorder_ids = (
+        topk_module._post_process_topk_ids(
+            topk_ids.clone(),
+            topk_weights.clone(),
+            config,
+            router_logits=torch.empty((2, 3)),
+            layer_id=0,
+            expert_location_dispatch_info=info,
+            lplb_decode_load_metric="static_allgather",
+        )
+    )
+    torch.testing.assert_close(gathered_ids, topk_ids)
+    torch.testing.assert_close(recorder_ids, topk_ids)
+    torch.testing.assert_close(gathered_weights, topk_weights)
 
 
 def test_empty_decode_participation_matches_policy(monkeypatch):
