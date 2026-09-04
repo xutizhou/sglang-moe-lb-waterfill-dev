@@ -197,7 +197,20 @@ def _update_gather_batch(
     skip_all_gather=False,
 ):
     # TODO: handle the case when moe_dense_tp_size != 1
-    if not require_mlp_tp_gather:
+    # The METRO/static all-gather decode path explicitly gathers the per-DP-rank
+    # hidden states before routing.  Native DeepEP normally keeps only the local
+    # token count when DP == TP because it does not need an MLP input gather;
+    # that leaves all_gatherv with a one-element sizes list.  Preserve the
+    # scheduler's already-collected global sizes for these decode modes without
+    # changing the normal DeepEP prefill path.
+    from sglang.srt.runtime_context import get_server_args
+
+    force_decode_global_sizes = (
+        batch.forward_mode.is_decode()
+        and get_server_args().lplb_decode_load_metric
+        in ("metro_allgather", "static_allgather")
+    )
+    if not require_mlp_tp_gather and not force_decode_global_sizes:
         batch.global_num_tokens = [mlp_sync_info.num_tokens]
         batch.global_num_tokens_for_logprob = [mlp_sync_info.num_tokens_for_logprob]
     else:

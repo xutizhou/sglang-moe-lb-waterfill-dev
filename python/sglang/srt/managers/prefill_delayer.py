@@ -107,9 +107,9 @@ class PrefillDelayer:
         self._curr_state: Optional[_State] = None
         self.skip_first_delayer = True
 
-        assert (
-            not server_args.disable_overlap_schedule
-        ), "To use PrefillDelayer, disable_overlap_schedule must be False."
+        # Pipeline parallelism forces the overlap scheduler off.  The delayer
+        # already selects the synchronous NCCL gather path above for that mode,
+        # so allow PP to use the same rank-admission negotiation.
 
     def _negotiate_should_allow_prefill(
         self,
