@@ -255,6 +255,13 @@ class LPLBSolver:
         )
         self._decode_p2p_resources = None
         self._decode_all_active_physical = None
+        # Globally consistent first-replica map: every rank sends all tokens of a
+        # logical expert to log2phy[:, 0].  This is the de-duplicating static
+        # baseline used by the METRO reproduction (static_allgather) but on the
+        # regular DeepEP dispatch path, so it can run under CUDA graphs.
+        self._decode_first_replica_physical = (
+            log2phy[:, 0].to(torch.int32).contiguous()
+        )
 
     def initialize_decode_p2p(self) -> None:
         """Create compact symmetric-memory resources for decode active-set union.
@@ -442,6 +449,10 @@ class LPLBSolver:
             self.decode_rank_mask,
             self.decode_log_replicated,
         )
+
+    def solve_decode_static_global(self, topk_ids: torch.Tensor) -> torch.Tensor:
+        """Map every logical expert to its first committed replica on all ranks."""
+        return self._decode_first_replica_physical[topk_ids]
 
     def solve_decode_all_active(self, topk_ids: torch.Tensor) -> torch.Tensor:
         """Map decode routes through the precomputed all-active assignment."""

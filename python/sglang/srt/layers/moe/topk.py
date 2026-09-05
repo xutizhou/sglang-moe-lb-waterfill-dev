@@ -1948,6 +1948,14 @@ def _post_process_topk_ids(
                     lplb_physical_topk_ids = lplb_solver.solve_decode_all_active(
                         topk_ids
                     )
+            elif lplb_decode_load_metric == "static_global":
+                from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
+
+                lplb_solver = get_global_lplb_solver(layer_id)
+                if lplb_solver is not None:
+                    lplb_physical_topk_ids = lplb_solver.solve_decode_static_global(
+                        topk_ids
+                    )
             else:
                 from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
 
