@@ -291,6 +291,7 @@ def _dispatch_decode_integral_module(
         cuda_wrappers=[
             ("dispatch_decode_integral", f"dispatch_decode_integral<{args}>"),
             ("dispatch_decode_metro", f"dispatch_decode_metro<{args}>"),
+            ("count_logical_f32", f"count_logical_f32<{args}>"),
             (
                 "dispatch_decode_metro_global",
                 f"dispatch_decode_metro_global<{args}>",
@@ -400,6 +401,22 @@ def dispatch_decode_integral_p2p(
         rank,
     )
     return out.view(original_shape).to(topk_ids.dtype)
+
+
+def count_logical_f32(
+    topk_ids: torch.Tensor,
+    num_logical: int,
+    num_gpus: int,
+    num_replicated: int,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Per-logical-expert token counts as float32 in a single launch."""
+    flat_ids = topk_ids.reshape(-1).contiguous().to(torch.int32)
+    if out is None:
+        out = torch.empty(num_logical, dtype=torch.float32, device=topk_ids.device)
+    module = _dispatch_decode_integral_module(num_logical, num_gpus, num_replicated, DISPATCH_BLOCK_DIM)
+    module.count_logical_f32(out, flat_ids)
+    return out
 
 
 def dispatch_decode_metro(

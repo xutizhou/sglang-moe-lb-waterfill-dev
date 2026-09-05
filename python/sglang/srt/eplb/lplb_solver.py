@@ -418,9 +418,21 @@ class LPLBSolver:
 
     def solve_decode_metro(self, topk_ids: torch.Tensor) -> torch.Tensor:
         """All-reduce the current active set and apply METRO Algorithm 1."""
-        from sglang.kernels.ops.lplb.cuda_solver import dispatch_decode_metro
+        from sglang.kernels.ops.lplb.cuda_solver import (
+            count_logical_f32,
+            dispatch_decode_metro,
+        )
 
-        global_counts = self._count_and_all_reduce(topk_ids)
+        # Fused count (one launch) instead of zeros + scatter_add_ + float().
+        local_counts = count_logical_f32(
+            topk_ids,
+            self.num_logical,
+            self.num_gpus,
+            self.decode_log_replicated.numel(),
+        )
+        global_counts = (
+            self.ep_group.all_reduce(local_counts) if self.ep_group is not None else local_counts
+        )
         return dispatch_decode_metro(
             topk_ids,
             global_counts,

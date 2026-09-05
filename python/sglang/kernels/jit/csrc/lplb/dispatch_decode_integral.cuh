@@ -58,6 +58,13 @@ __global__ void dispatch_decode_integral_kernel(
   __shared__ int fixed_active_load[NUM_GPUS];
   __shared__ int fixed_token_load[NUM_GPUS];
   __shared__ uint32_t global_active[ACTIVE_WORDS];
+  // Replicated-expert metadata staged in shared memory by all threads so the
+  // serial greedy on thread 0 never waits on a dependent global load.  Before
+  // this the METRO kernel spent ~18 us/layer, almost all of it in ~50 chained
+  // L2 round trips from one thread.
+  __shared__ int rep_logical_s[REPLICATED_STORAGE];
+  __shared__ uint32_t rep_mask_s[REPLICATED_STORAGE];
+  __shared__ int32_t rep_phys_s[REPLICATED_STORAGE * NUM_GPUS];
 
   for (int logical = threadIdx.x; logical < NUM_LOGICAL; logical += BLOCK_DIM) {
     if constexpr (GATHER_P2P || COUNT_GLOBAL_INPUT) {
@@ -137,6 +144,15 @@ __global__ void dispatch_decode_integral_kernel(
       atomicAdd(&fixed_token_load[first_rank], count);
     }
   }
+  for (int i = threadIdx.x; i < NUM_REPLICATED; i += BLOCK_DIM) {
+    const int logical = replicated_logical[i];
+    rep_logical_s[i] = logical;
+    rep_mask_s[i] = static_cast<uint32_t>(rank_mask[logical]);
+#pragma unroll
+    for (int r = 0; r < NUM_GPUS; ++r) {
+      rep_phys_s[i * NUM_GPUS + r] = physical_by_rank[logical * NUM_GPUS + r];
+    }
+  }
   __syncthreads();
 
   if (threadIdx.x == 0) {
@@ -149,9 +165,9 @@ __global__ void dispatch_decode_integral_kernel(
         active_load[rank] = fixed_active_load[rank];
       }
       for (int i = 0; i < NUM_REPLICATED; ++i) {
-        const int logical = replicated_logical[i];
+        const int logical = rep_logical_s[i];
         if (logical_counts[logical] <= 0) continue;
-        uint32_t eligible = static_cast<uint32_t>(rank_mask[logical]);
+        uint32_t eligible = rep_mask_s[i];
         int best_rank = -1;
         int best_load = NUM_LOGICAL + 1;
         while (eligible != 0) {
@@ -164,8 +180,7 @@ __global__ void dispatch_decode_integral_kernel(
           }
         }
         if (best_rank >= 0) {
-          chosen_physical[logical] =
-              physical_by_rank[logical * NUM_GPUS + best_rank];
+          chosen_physical[logical] = rep_phys_s[i * NUM_GPUS + best_rank];
           ++active_load[best_rank];
         }
       }
@@ -513,6 +528,46 @@ void dispatch_decode_metro_p2p(
       reinterpret_cast<void* const*>(flag_ptrs_dev),
       reinterpret_cast<uint32_t*>(barrier_state_ptr),
       static_cast<uint32_t>(rank));
+}
+
+template <int NUM_LOGICAL, int BLOCK_DIM>
+__global__ void count_logical_f32_kernel(
+    float* __restrict__ out_counts,
+    const int32_t* __restrict__ in_topk_ids,
+    int n) {
+  __shared__ int counts[NUM_LOGICAL];
+  for (int i = threadIdx.x; i < NUM_LOGICAL; i += BLOCK_DIM) counts[i] = 0;
+  __syncthreads();
+  for (int idx = threadIdx.x; idx < n; idx += BLOCK_DIM) {
+    const int logical = in_topk_ids[idx];
+    if (logical >= 0 && logical < NUM_LOGICAL) atomicAdd(counts + logical, 1);
+  }
+  __syncthreads();
+  for (int i = threadIdx.x; i < NUM_LOGICAL; i += BLOCK_DIM) {
+    out_counts[i] = static_cast<float>(counts[i]);
+  }
+}
+
+// One launch producing the float32 per-logical-expert token count that the EP
+// all-reduce consumes.  Replaces the fill / scatter_add / dtype-cast trio from
+// Python (three launches plus their graph-replay gaps).
+template <int NUM_LOGICAL, int NUM_GPUS, int NUM_REPLICATED, int BLOCK_DIM>
+void count_logical_f32(
+    tvm::ffi::TensorView out_counts,
+    tvm::ffi::TensorView in_topk_ids) {
+  using namespace host;
+
+  SymbolicSize N{"num_topk_entries"};
+  SymbolicDevice device_;
+  TensorMatcher({N}).with_dtype<int32_t>().with_device<kDLCUDA>(device_).verify(in_topk_ids);
+  TensorMatcher({NUM_LOGICAL}).with_dtype<float>().with_device<kDLCUDA>(device_).verify(out_counts);
+  const DLDevice device = device_.unwrap();
+  auto kernel = count_logical_f32_kernel<NUM_LOGICAL, BLOCK_DIM>;
+  LaunchKernel(/*grid=*/1, /*block=*/BLOCK_DIM, device)(
+      kernel,
+      static_cast<float*>(out_counts.data_ptr()),
+      static_cast<const int32_t*>(in_topk_ids.data_ptr()),
+      static_cast<int>(N.unwrap()));
 }
 
 }  // namespace
