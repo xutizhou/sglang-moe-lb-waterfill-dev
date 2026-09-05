@@ -2256,6 +2256,7 @@ class ServerArgs:
             "active_experts_prior",
             "static",
             "static_global",
+            "dynamic_random",
         ],
         "Decode policy used with --ep-dispatch-algorithm=lp. 'tokens' runs "
         "the regular token-count LPLB solver, 'metro' reproduces the paper's "

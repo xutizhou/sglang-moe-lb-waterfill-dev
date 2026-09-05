@@ -1956,6 +1956,17 @@ def _post_process_topk_ids(
                     lplb_physical_topk_ids = lplb_solver.solve_decode_static_global(
                         topk_ids
                     )
+            elif lplb_decode_load_metric == "dynamic_random":
+                # SGLang's --ep-dispatch-algorithm dynamic applied to decode only:
+                # a uniformly random replica per token, which spreads a logical
+                # expert's tokens over its replicas and activates duplicate
+                # weights.  This is the token-balanced baseline of the METRO
+                # paper; prefill keeps the token-count LPLB like the other modes.
+                lplb_physical_topk_ids = (
+                    expert_location_dispatch._topk_ids_logical_to_physical_dynamic(
+                        topk_ids, expert_location_dispatch_info
+                    )
+                )
             else:
                 from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
 
