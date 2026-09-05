@@ -110,6 +110,19 @@ def solve_ipm(
     assert b.shape == (nc,), f"b shape mismatch: {b.shape} vs ({nc},)"
     assert c.shape == (nv,), f"c shape mismatch: {c.shape} vs ({nv},)"
 
+    from sglang.kernels.ops.lplb.torch_solver import _torch_fallback_enabled
+
+    if _torch_fallback_enabled():
+        from sglang.kernels.ops.lplb.shmem_budget import fits
+
+        if not fits(nc, nv, gpu="h100"):
+            from sglang.kernels.ops.lplb.torch_solver import solve_ipm_torch_reference
+
+            x = solve_ipm_torch_reference(A, b, c, num_iters=num_iters)
+            if result is None:
+                return x
+            result.copy_(x)
+            return result
     module = _ipm_module(nc, nv, DEFAULT_BLOCK_DIM, num_iters, _sm_ver())
     if result is None:
         result = torch.empty(nv, dtype=torch.float32, device=A.device)

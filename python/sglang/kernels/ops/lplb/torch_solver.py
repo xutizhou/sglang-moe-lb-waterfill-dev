@@ -68,6 +68,17 @@ def _init_fused_backend() -> None:
     logger.info("LPLB fused solver enabled (CUDA C++ via load_jit, cuBLASDx)")
 
 
+def _torch_fallback_enabled() -> bool:
+    """Opt-in: fall back to the torch IPM when the fused kernel cannot fit shmem.
+
+    Only meant for experiments (e.g. 1.5x replication where the prefill LP has
+    NC=126/NV=256); the torch path is far slower than the fused kernel.
+    """
+    import os
+
+    return os.environ.get("SGLANG_LPLB_IPM_TORCH_FALLBACK", "0") == "1"
+
+
 def _unavailable_reason() -> str:
     if not torch.cuda.is_available():
         return "CUDA is not available"
@@ -91,6 +102,16 @@ def warmup(nc: int, nv: int, num_iters: int = 5, device: str = "cuda") -> None:
     _init_fused_backend()
     if not _FUSED_AVAILABLE:
         raise RuntimeError(f"LPLB fused solver unavailable: {_unavailable_reason()}")
+    if _torch_fallback_enabled():
+        from sglang.kernels.ops.lplb.shmem_budget import fits
+
+        if not fits(nc, nv, gpu="h100"):
+            logger.warning(
+                "LPLB fused IPM does not fit shared memory for (NC=%d, NV=%d); "
+                "SGLANG_LPLB_IPM_TORCH_FALLBACK=1 -> using the torch reference solver",
+                nc, nv,
+            )
+            return
     _FUSED_ASSERT_FITS(nc, nv, gpu="h100")
     _FUSED_WARMUP(nc, nv, num_iters=num_iters, device=device)
 
