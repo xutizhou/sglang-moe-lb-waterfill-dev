@@ -1915,11 +1915,25 @@ def _post_process_topk_ids(
         log2phy_prob = None
         lplb_physical_topk_ids = None
         _dispatch_algo = getattr(expert_location_dispatch_info, "ep_dispatch_algorithm", None)
+        _decode_only_metric = lplb_decode_load_metric in ("metro", "static_global", "dynamic_random")
+        if _dispatch_algo == "static" and lplb_decode_load_metric == "metro":
+            # METRO needs one EP all-reduce per MoE layer.  Under lp prefill every
+            # rank issues a count all-reduce per layer in either phase, so mixed
+            # prefill/decode steps across DP ranks stay matched; under stock static
+            # prefill the prefill ranks issue none, and a decode rank entering the
+            # all-reduce while a peer is in DeepEP normal-mode dispatch deadlocks
+            # (CPU recv timeout).  Mixed steps are eager (never graph replay), so
+            # fall back to the static map there and run METRO only in pure-decode
+            # steps, which is where all the steady-state time is.
+            from sglang.srt.layers.dp_attention import get_is_extend_in_batch
+
+            if get_is_extend_in_batch():
+                _decode_only_metric = False
         if expert_location_dispatch_info is not None and (
             (_dispatch_algo == "lp" and lplb_decode_load_metric != "static")
             # Decode-only replica policies on top of stock static prefill dispatch.
             # lplb_decode_load_metric is None outside decode, so prefill is untouched.
-            or (_dispatch_algo == "static" and lplb_decode_load_metric in ("metro", "static_global", "dynamic_random"))
+            or (_dispatch_algo == "static" and _decode_only_metric)
         ):
             if lplb_decode_load_metric in ("metro_allgather", "static_allgather"):
                 from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
