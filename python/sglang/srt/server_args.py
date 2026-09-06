@@ -2258,7 +2258,10 @@ class ServerArgs:
             "static_global",
             "dynamic_random",
         ],
-        "Decode policy used with --ep-dispatch-algorithm=lp. 'tokens' runs "
+        "Decode replica policy. With --ep-dispatch-algorithm=lp any value applies; "
+        "with --ep-dispatch-algorithm=static only 'metro', 'static_global' and "
+        "'dynamic_random' are honoured (prefill stays stock static dispatch, only "
+        "decode changes). 'tokens' runs "
         "the regular token-count LPLB solver, 'metro' reproduces the paper's "
         "greedy current-active-expert assignment, 'metro_allgather' also replaces "
         "dispatch with all-gather as in the paper, 'static_allgather' uses the same "

@@ -91,6 +91,7 @@ def init_lplb_solvers(*, model_config: ModelConfig) -> None:
     from sglang.srt.runtime_context import get_server_args
 
     decode_load_metric = get_server_args().lplb_decode_load_metric
+    prefill_is_lp = get_server_args().ep_dispatch_algorithm == "lp"
     clear_global_lplb_solvers()
     ep_group = get_moe_ep_group()
     for lid in range(metadata.num_layers):
@@ -102,6 +103,7 @@ def init_lplb_solvers(*, model_config: ModelConfig) -> None:
             logical_to_all_physical_map_num_valid=(
                 metadata.logical_to_all_physical_map_num_valid[lid]
             ),
+            skip_ipm_warmup=not prefill_is_lp,
         )
         if decode_load_metric == "active_experts":
             solver.initialize_decode_p2p()

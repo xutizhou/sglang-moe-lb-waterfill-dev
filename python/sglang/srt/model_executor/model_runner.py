@@ -654,7 +654,14 @@ class ModelRunner:
         )
 
     def maybe_init_lplb_solvers(self):
-        if self.server_args.ep_dispatch_algorithm == "lp" and not self.is_draft_worker:
+        if self.is_draft_worker:
+            return
+        algo = self.server_args.ep_dispatch_algorithm
+        metric = self.server_args.lplb_decode_load_metric
+        # Decode-only replica policies work on top of stock static (EPLB) prefill
+        # dispatch; they only need the per-layer decode metadata of the solver.
+        decode_only = algo == "static" and metric in ("metro", "static_global", "dynamic_random")
+        if algo == "lp" or decode_only:
             init_lplb_solvers(model_config=self.model_config)
 
     def maybe_init_eplb_manager(self):

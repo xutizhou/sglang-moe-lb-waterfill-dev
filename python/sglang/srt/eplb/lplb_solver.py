@@ -91,6 +91,7 @@ class LPLBSolver:
         num_gpus: int,
         ep_group=None,
         logical_to_all_physical_map_num_valid=None,
+        skip_ipm_warmup: bool = False,
     ):
         """
         Args:
@@ -235,7 +236,11 @@ class LPLBSolver:
         nv = self.A_base.shape[1] + 1  # +1 for Big-M column added in solve()
         from sglang.kernels.ops.lplb.torch_solver import warmup as _ipm_warmup
 
-        _ipm_warmup(nc, nv, num_iters=5, device=device)
+        # Decode-only replica policies (metro / static_global / dynamic_random
+        # under --ep-dispatch-algorithm static) never run the prefill LP, so
+        # the fused IPM need not be compiled or fit shared memory.
+        if not skip_ipm_warmup:
+            _ipm_warmup(nc, nv, num_iters=5, device=device)
 
         # Pre-compute A_base row sum (used in every prep call).
         self._A_base_row_sum = self.A_base.sum(dim=1).contiguous()  # (NC,)

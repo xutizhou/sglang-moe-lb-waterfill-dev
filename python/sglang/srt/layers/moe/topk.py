@@ -1914,11 +1914,12 @@ def _post_process_topk_ids(
         # EP all-reduce that can't run inside compiled regions).
         log2phy_prob = None
         lplb_physical_topk_ids = None
-        if (
-            expert_location_dispatch_info is not None
-            and getattr(expert_location_dispatch_info, "ep_dispatch_algorithm", None)
-            == "lp"
-            and lplb_decode_load_metric != "static"
+        _dispatch_algo = getattr(expert_location_dispatch_info, "ep_dispatch_algorithm", None)
+        if expert_location_dispatch_info is not None and (
+            (_dispatch_algo == "lp" and lplb_decode_load_metric != "static")
+            # Decode-only replica policies on top of stock static prefill dispatch.
+            # lplb_decode_load_metric is None outside decode, so prefill is untouched.
+            or (_dispatch_algo == "static" and lplb_decode_load_metric in ("metro", "static_global", "dynamic_random"))
         ):
             if lplb_decode_load_metric in ("metro_allgather", "static_allgather"):
                 from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
