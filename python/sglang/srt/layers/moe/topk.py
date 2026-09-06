@@ -641,7 +641,24 @@ class TopK(MultiPlatformOp):
             from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
 
             lplb_solver = get_global_lplb_solver(layer_id)
-            if lplb_solver is not None:
+            from sglang.srt.runtime_context import get_server_args
+
+            if lplb_solver is not None and get_server_args().ep_dispatch_algorithm == "static":
+                # Decode-only replica policy on top of stock static prefill.  The
+                # only collective in this configuration is METRO's per-layer
+                # all-reduce, and the non-empty ranks issue it exactly when the
+                # step is pure decode (see the is_extend_in_batch guard in the
+                # post-process path).  Mirror that here so an idle rank neither
+                # skips a collective its peers issue nor issues one they skip.
+                if self.lplb_decode_load_metric == "metro":
+                    from sglang.srt.layers.dp_attention import get_is_extend_in_batch
+
+                    if not get_is_extend_in_batch():
+                        empty_topk_ids = torch.empty(
+                            (0, self.topk_config.top_k), dtype=torch.int32, device=device
+                        )
+                        lplb_solver.solve_decode_metro(empty_topk_ids)
+            elif lplb_solver is not None:
                 empty_topk_ids = torch.empty(
                     (0, self.topk_config.top_k),
                     dtype=torch.int32,
