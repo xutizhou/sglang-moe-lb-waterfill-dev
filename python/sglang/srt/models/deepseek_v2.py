@@ -899,6 +899,7 @@ class DeepseekV2MoE(nn.Module):
                     gemm_output_zero_allocator,
                     input_ids,
                     input_ids_global=input_ids_global,
+                    is_decode=forward_batch.forward_mode.is_decode(),
                 )
             else:
                 return self.forward_normal(
@@ -907,6 +908,7 @@ class DeepseekV2MoE(nn.Module):
                     input_ids,
                     input_ids_global=input_ids_global,
                     skip_shared_experts=skip_shared_experts,
+                    is_decode=forward_batch.forward_mode.is_decode(),
                 )
         else:
             return self.forward_deepep(
@@ -919,6 +921,7 @@ class DeepseekV2MoE(nn.Module):
         gemm_output_zero_allocator: BumpAllocator = None,
         input_ids: Optional[torch.Tensor] = None,
         input_ids_global: Optional[torch.Tensor] = None,
+        is_decode: Optional[bool] = None,
     ) -> torch.Tensor:
         # Note(kpham-sgl): issue order satisfies 3 constraints:
         # - no stream explosion: main (routed) issued before alt block -> capture reuses 1 alt stream;
@@ -946,10 +949,13 @@ class DeepseekV2MoE(nn.Module):
                 topk_config=self.topk.topk_config,
             )
         else:
+            # Decode replica policies (METRO etc.) key off the forward mode;
+            # without is_decode the non-DeepEP path never applied them.  The
+            # hash-routed TopK has no such argument.
             topk_kwargs = (
                 {"input_ids": input_ids_global}
                 if getattr(self, "is_hash", False)
-                else {}
+                else {"is_decode": is_decode}
             )
             topk_output = self.topk(
                 hidden_states,
@@ -1021,6 +1027,7 @@ class DeepseekV2MoE(nn.Module):
         input_ids: Optional[torch.Tensor] = None,
         input_ids_global: Optional[torch.Tensor] = None,
         skip_shared_experts: bool = False,
+        is_decode: Optional[bool] = None,
     ) -> torch.Tensor:
         if hasattr(self, "shared_experts") and use_intel_amx_backend(
             self.shared_experts.gate_up_proj
@@ -1048,10 +1055,13 @@ class DeepseekV2MoE(nn.Module):
                 )
             # router_logits: (num_tokens, n_experts)
             router_logits = self.gate(hidden_states, gemm_output_zero_allocator)
+            # Decode replica policies (METRO etc.) key off the forward mode;
+            # without is_decode the non-DeepEP path never applied them.  The
+            # hash-routed TopK has no such argument.
             topk_kwargs = (
                 {"input_ids": input_ids_global}
                 if getattr(self, "is_hash", False)
-                else {}
+                else {"is_decode": is_decode}
             )
             topk_output = self.topk(
                 hidden_states,
@@ -1062,7 +1072,7 @@ class DeepseekV2MoE(nn.Module):
         else:
             shared_output = None
             topk_output = self.topk.empty_topk_output(
-                hidden_states.device, layer_id=self.layer_id
+                hidden_states.device, layer_id=self.layer_id, is_decode=is_decode
             )
 
         if self._fuse_shared_experts_inside_sbo and not skip_shared_experts:
