@@ -514,7 +514,10 @@ class LPLBSolver:
             # next step; by now (~one layer later) it has long finished.
             main.wait_stream(st.stream)
             st.pending = False
-        out = metro_route_stale(topk_ids, self._metro_counts, self.metro_tables)
+        out = metro_route_stale(
+            topk_ids, self._metro_counts, self.metro_tables,
+            inactive_weight=int(os.environ.get("SGLANG_METRO_STALE_INACTIVE_WEIGHT", "0")),
+        )
         if self.ep_group is not None:
             st.stream.wait_stream(main)
             with torch.cuda.stream(st.stream):

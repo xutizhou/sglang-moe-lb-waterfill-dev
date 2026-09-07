@@ -597,7 +597,8 @@ __global__ void metro_route_v2_kernel(
     const int32_t* __restrict__ rep_logical,
     const int32_t* __restrict__ rep_mask,
     const int32_t* __restrict__ rep_phys,
-    int N) {
+    int N,
+    int inactive_weight) {
   static_assert(NUM_GPUS <= 32, "warp argmin covers at most 32 ranks");
   static_assert(BLOCK_DIM >= 32, "greedy runs on warp 0");
   constexpr int RS = NUM_REPLICATED > 0 ? NUM_REPLICATED : 1;
@@ -652,17 +653,35 @@ __global__ void metro_route_v2_kernel(
     // METRO greedy.  Lane r owns rank r's active load; the per-expert argmin
     // over eligible ranks is one warp-wide min (redux.sync on sm_80+), with
     // (load, rank) packed so ties break to the lowest rank exactly as v1.
-    int load = (lane < NUM_GPUS) ? fixed_active_load[lane] : 0;
+    // Loads are kept in eighths so a second pass can place experts that were
+    // inactive in the (stale) count with a fractional expected weight.
+    int load = ((lane < NUM_GPUS) ? fixed_active_load[lane] : 0) * 8;
+    if (inactive_weight > 0) {
+      // Append the inactive replicated experts after the active ones; the
+      // greedy below places them on the least-loaded eligible rank with weight
+      // inactive_weight/8 so that experts newly active this step land where
+      // there is slack instead of all defaulting to their first replica.
+      int base = num_active;
+      for (int c = 0; c < NUM_REPLICATED; c += 32) {
+        const int i = c + lane;
+        const bool a = (i < NUM_REPLICATED) && (active_s[rep_logical_s[i]] == 0);
+        const uint32_t b = __ballot_sync(0xffffffffu, a);
+        if (a) active_rep_idx[base + __popc(b & ((1u << lane) - 1u))] = i;
+        base += __popc(b);
+      }
+    }
+    const int num_pass = inactive_weight > 0 ? NUM_REPLICATED : num_active;
     // Software-pipelined: the expert index / mask / my physical id for step
     // k+1 do not depend on the loads, so fetch them while step k reduces.
-    int i_next = num_active > 0 ? active_rep_idx[0] : 0;
+    int i_next = num_pass > 0 ? active_rep_idx[0] : 0;
     uint32_t mask_next = rep_mask_s[i_next];
     int32_t phys_next = (lane < NUM_GPUS) ? rep_phys_s[i_next * NUM_GPUS + lane] : -1;
-    for (int k = 0; k < num_active; ++k) {
+    for (int k = 0; k < num_pass; ++k) {
       const int i = i_next;
       const uint32_t mask = mask_next;
       const int32_t my_phys = phys_next;
-      if (k + 1 < num_active) {
+      const int weight = k < num_active ? 8 : inactive_weight;
+      if (k + 1 < num_pass) {
         i_next = active_rep_idx[k + 1];
         mask_next = rep_mask_s[i_next];
         phys_next = (lane < NUM_GPUS) ? rep_phys_s[i_next * NUM_GPUS + lane] : -1;
@@ -681,7 +700,7 @@ __global__ void metro_route_v2_kernel(
       // A replicated expert always has >= 2 eligible ranks, so best_key is a
       // real (load, rank) key; the winning lane records its own physical id.
       if (key == best_key) {
-        ++load;
+        load += weight;
         chosen_physical[rep_logical_s[i]] = my_phys;
       }
     }
@@ -708,7 +727,8 @@ void metro_route_v2_impl(
     tvm::ffi::TensorView single_rank,
     tvm::ffi::TensorView rep_logical,
     tvm::ffi::TensorView rep_mask,
-    tvm::ffi::TensorView rep_phys) {
+    tvm::ffi::TensorView rep_phys,
+    int64_t inactive_weight) {
   using namespace host;
 
   SymbolicSize N{"num_topk_entries"};
@@ -716,6 +736,7 @@ void metro_route_v2_impl(
   TensorMatcher({N}).with_dtype<int32_t>().with_device<kDLCUDA>(device_)
       .verify(out_topk_ids).verify(in_topk_ids);
   TensorMatcher({NUM_LOGICAL}).with_dtype<float>().with_device<kDLCUDA>(device_).verify(counts);
+  RuntimeCheck(inactive_weight >= 0 && inactive_weight <= 8, "inactive_weight must be in [0, 8]");
   TensorMatcher({NUM_LOGICAL}).with_dtype<int32_t>().with_device<kDLCUDA>(device_)
       .verify(default_physical).verify(single_rank);
   TensorMatcher({NUM_REPLICATED}).with_dtype<int32_t>().with_device<kDLCUDA>(device_)
@@ -735,7 +756,8 @@ void metro_route_v2_impl(
       static_cast<const int32_t*>(rep_logical.data_ptr()),
       static_cast<const int32_t*>(rep_mask.data_ptr()),
       static_cast<const int32_t*>(rep_phys.data_ptr()),
-      static_cast<int>(N.unwrap()));
+      static_cast<int>(N.unwrap()),
+      static_cast<int>(inactive_weight));
 }
 
 template <int NUM_LOGICAL, int NUM_GPUS, int NUM_REPLICATED, int BLOCK_DIM>
@@ -747,9 +769,10 @@ void metro_route_v2(
     tvm::ffi::TensorView single_rank,
     tvm::ffi::TensorView rep_logical,
     tvm::ffi::TensorView rep_mask,
-    tvm::ffi::TensorView rep_phys) {
+    tvm::ffi::TensorView rep_phys,
+    int64_t inactive_weight) {
   metro_route_v2_impl<NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, false>(
-      out_topk_ids, in_topk_ids, counts, default_physical, single_rank, rep_logical, rep_mask, rep_phys);
+      out_topk_ids, in_topk_ids, counts, default_physical, single_rank, rep_logical, rep_mask, rep_phys, inactive_weight);
 }
 
 template <int NUM_LOGICAL, int NUM_GPUS, int NUM_REPLICATED, int BLOCK_DIM>
@@ -761,9 +784,10 @@ void metro_route_stale(
     tvm::ffi::TensorView single_rank,
     tvm::ffi::TensorView rep_logical,
     tvm::ffi::TensorView rep_mask,
-    tvm::ffi::TensorView rep_phys) {
+    tvm::ffi::TensorView rep_phys,
+    int64_t inactive_weight) {
   metro_route_v2_impl<NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, true>(
-      out_topk_ids, in_topk_ids, counts, default_physical, single_rank, rep_logical, rep_mask, rep_phys);
+      out_topk_ids, in_topk_ids, counts, default_physical, single_rank, rep_logical, rep_mask, rep_phys, inactive_weight);
 }
 
 }  // namespace

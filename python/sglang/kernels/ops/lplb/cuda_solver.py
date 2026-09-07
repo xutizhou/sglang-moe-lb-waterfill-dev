@@ -327,7 +327,7 @@ class MetroStaticTables:
         self.rep_phys = physical_by_rank[self.rep_logical.long()].reshape(-1).to(torch.int32).contiguous()
 
 
-def _metro_v2_launch(name: str, topk_ids: torch.Tensor, counts: torch.Tensor, tables: MetroStaticTables) -> torch.Tensor:
+def _metro_v2_launch(name: str, topk_ids: torch.Tensor, counts: torch.Tensor, tables: MetroStaticTables, inactive_weight: int = 0) -> torch.Tensor:
     if not topk_ids.is_cuda:
         raise RuntimeError(f"{name} requires CUDA tensors; got topk_ids on {topk_ids.device}.")
     original_shape = topk_ids.shape
@@ -338,6 +338,7 @@ def _metro_v2_launch(name: str, topk_ids: torch.Tensor, counts: torch.Tensor, ta
     getattr(module, name)(
         out, flat_ids, counts,
         tables.default_physical, tables.single_rank, tables.rep_logical, tables.rep_mask, tables.rep_phys,
+        int(inactive_weight),
     )
     return out.view(original_shape).to(topk_ids.dtype)
 
@@ -347,10 +348,13 @@ def metro_route_v2(topk_ids: torch.Tensor, global_counts: torch.Tensor, tables: 
     return _metro_v2_launch("metro_route_v2", topk_ids, global_counts, tables)
 
 
-def metro_route_stale(topk_ids: torch.Tensor, counts: torch.Tensor, tables: MetroStaticTables) -> torch.Tensor:
+def metro_route_stale(topk_ids: torch.Tensor, counts: torch.Tensor, tables: MetroStaticTables, inactive_weight: int = 0) -> torch.Tensor:
     """Route with the counts in ``counts`` (previous step's global active set),
-    then overwrite ``counts`` with this rank's local counts for the current step."""
-    return _metro_v2_launch("metro_route_stale", topk_ids, counts, tables)
+    then overwrite ``counts`` with this rank's local counts for the current step.
+    inactive_weight (0..8, in eighths of an active expert): if > 0, replicated
+    experts that were inactive in the stale set are also placed greedily with
+    that expected weight instead of defaulting to their first replica."""
+    return _metro_v2_launch("metro_route_stale", topk_ids, counts, tables, inactive_weight)
 
 
 def dispatch_decode_integral(
