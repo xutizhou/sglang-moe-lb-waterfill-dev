@@ -1960,10 +1960,19 @@ def _post_process_topk_ids(
                     lplb_solver.mark_metro_allgather_decode()
             elif lplb_decode_load_metric == "metro":
                 from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
+                from sglang.srt.layers.moe import get_moe_a2a_backend
 
                 lplb_solver = get_global_lplb_solver(layer_id)
                 if lplb_solver is not None:
-                    lplb_physical_topk_ids = lplb_solver.solve_decode_metro(topk_ids)
+                    if get_moe_a2a_backend().is_none():
+                        # NCCL MoE path: the sparse layer's MLP input is
+                        # ScatterMode.FULL, so topk_ids already cover the global
+                        # batch on every rank.  Count and route locally; the
+                        # per-layer count all-reduce would be redundant (it cost
+                        # 2.3 ms/step across two nodes at EP16).
+                        lplb_physical_topk_ids = lplb_solver.route_decode_metro_global(topk_ids)
+                    else:
+                        lplb_physical_topk_ids = lplb_solver.solve_decode_metro(topk_ids)
             elif lplb_decode_load_metric == "active_experts":
                 from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
 
