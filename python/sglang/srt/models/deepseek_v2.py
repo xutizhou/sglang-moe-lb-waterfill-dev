@@ -935,9 +935,14 @@ class DeepseekV2MoE(nn.Module):
             hidden_states.shape[0] > 0 and self.num_fused_shared_experts == 0
         )
         server_args = get_server_args()
+        # Redundant experts (--init-expert-location + --ep-num-redundant-experts)
+        # need the logical->physical map whether or not EPLB rebalancing is on;
+        # init_new() already returns None when no dispatch algorithm is set.
+        # forward_deepep did this unconditionally; the NCCL path did not, so
+        # with redundancy and no --enable-eplb it computed with wrong experts.
         dispatch_info = (
             ExpertLocationDispatchInfo.init_new(layer_id=self.layer_id)
-            if server_args.enable_eplb and not self.is_nextn
+            if not self.is_nextn
             else None
         )
         # router_logits: (num_tokens, n_experts)
@@ -1034,9 +1039,14 @@ class DeepseekV2MoE(nn.Module):
         ):
             return self.forward_cpu(hidden_states)
         server_args = get_server_args()
+        # Redundant experts (--init-expert-location + --ep-num-redundant-experts)
+        # need the logical->physical map whether or not EPLB rebalancing is on;
+        # init_new() already returns None when no dispatch algorithm is set.
+        # forward_deepep did this unconditionally; the NCCL path did not, so
+        # with redundancy and no --enable-eplb it computed with wrong experts.
         dispatch_info = (
             ExpertLocationDispatchInfo.init_new(layer_id=self.layer_id)
-            if server_args.enable_eplb and not self.is_nextn
+            if not self.is_nextn
             else None
         )
         defer_shared = not self.experts.moe_runner_config.inplace
