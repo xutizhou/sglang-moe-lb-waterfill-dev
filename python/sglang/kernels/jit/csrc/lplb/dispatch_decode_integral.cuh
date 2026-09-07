@@ -570,4 +570,200 @@ void count_logical_f32(
       static_cast<int>(N.unwrap()));
 }
 
+
+// ---------------------------------------------------------------------------
+// METRO v2: warp-parallel greedy over precomputed static tables.
+//
+// Same assignment as dispatch_decode_metro (METRO Algorithm 1 in logical-id
+// order, min active load, lowest rank on ties), but
+//   * every static per-layer table (default replica, single-copy rank,
+//     replicated-expert list/mask/physical ids) is precomputed on the host and
+//     read with coalesced loads instead of chained dependent gathers;
+//   * the per-expert argmin over eligible ranks is a 5-step warp shuffle
+//     reduction (lane r owns rank r's load) instead of a serial ffs loop on one
+//     thread.  R=128 went from ~24 us to a few us per layer.
+// WRITE_LOCAL_COUNTS: after routing with the counts currently in `counts`
+// (the previous decode step's reduced global counts), overwrite `counts`
+// with this rank's local counts for the current step, so a side-stream
+// all-reduce can produce the next step's global counts off the critical path.
+// ---------------------------------------------------------------------------
+template <int NUM_LOGICAL, int NUM_GPUS, int NUM_REPLICATED, int BLOCK_DIM, bool WRITE_LOCAL_COUNTS>
+__global__ void metro_route_v2_kernel(
+    int32_t* __restrict__ out_topk_ids,
+    const int32_t* __restrict__ in_topk_ids,
+    float* __restrict__ counts,
+    const int32_t* __restrict__ default_physical,
+    const int32_t* __restrict__ single_rank,
+    const int32_t* __restrict__ rep_logical,
+    const int32_t* __restrict__ rep_mask,
+    const int32_t* __restrict__ rep_phys,
+    int N) {
+  static_assert(NUM_GPUS <= 32, "warp argmin covers at most 32 ranks");
+  static_assert(BLOCK_DIM >= 32, "greedy runs on warp 0");
+  constexpr int RS = NUM_REPLICATED > 0 ? NUM_REPLICATED : 1;
+
+  __shared__ int32_t chosen_physical[NUM_LOGICAL];
+  __shared__ int32_t active_s[NUM_LOGICAL];
+  __shared__ int local_counts_s[NUM_LOGICAL];
+  __shared__ int fixed_active_load[NUM_GPUS];
+  __shared__ int rep_logical_s[RS];
+  __shared__ uint32_t rep_mask_s[RS];
+  __shared__ int32_t rep_phys_s[RS * NUM_GPUS];
+  __shared__ int active_rep_idx[RS];
+
+  if (threadIdx.x < NUM_GPUS) fixed_active_load[threadIdx.x] = 0;
+  for (int l = threadIdx.x; l < NUM_LOGICAL; l += BLOCK_DIM) local_counts_s[l] = 0;
+  __syncthreads();
+
+  for (int l = threadIdx.x; l < NUM_LOGICAL; l += BLOCK_DIM) {
+    const bool active = counts[l] > 0.0f;
+    active_s[l] = active ? 1 : 0;
+    chosen_physical[l] = default_physical[l];
+    const int sr = single_rank[l];
+    if (active && sr >= 0) atomicAdd(&fixed_active_load[sr], 1);
+  }
+  for (int i = threadIdx.x; i < NUM_REPLICATED; i += BLOCK_DIM) {
+    rep_logical_s[i] = rep_logical[i];
+    rep_mask_s[i] = static_cast<uint32_t>(rep_mask[i]);
+  }
+  for (int i = threadIdx.x; i < NUM_REPLICATED * NUM_GPUS; i += BLOCK_DIM) {
+    rep_phys_s[i] = rep_phys[i];
+  }
+  if constexpr (WRITE_LOCAL_COUNTS) {
+    for (int idx = threadIdx.x; idx < N; idx += BLOCK_DIM) {
+      const int l = in_topk_ids[idx];
+      if (l >= 0 && l < NUM_LOGICAL) atomicAdd(local_counts_s + l, 1);
+    }
+  }
+  __syncthreads();
+
+  if (threadIdx.x < 32) {
+    const int lane = threadIdx.x;
+    // Order-preserving compaction of the active replicated experts so the
+    // serial greedy below has no divergent skips and a known trip count.
+    int num_active = 0;
+    for (int c = 0; c < NUM_REPLICATED; c += 32) {
+      const int i = c + lane;
+      const bool a = (i < NUM_REPLICATED) && (active_s[rep_logical_s[i]] != 0);
+      const uint32_t b = __ballot_sync(0xffffffffu, a);
+      if (a) active_rep_idx[num_active + __popc(b & ((1u << lane) - 1u))] = i;
+      num_active += __popc(b);
+    }
+    // METRO greedy.  Lane r owns rank r's active load; the per-expert argmin
+    // over eligible ranks is one warp-wide min (redux.sync on sm_80+), with
+    // (load, rank) packed so ties break to the lowest rank exactly as v1.
+    int load = (lane < NUM_GPUS) ? fixed_active_load[lane] : 0;
+    // Software-pipelined: the expert index / mask / my physical id for step
+    // k+1 do not depend on the loads, so fetch them while step k reduces.
+    int i_next = num_active > 0 ? active_rep_idx[0] : 0;
+    uint32_t mask_next = rep_mask_s[i_next];
+    int32_t phys_next = (lane < NUM_GPUS) ? rep_phys_s[i_next * NUM_GPUS + lane] : -1;
+    for (int k = 0; k < num_active; ++k) {
+      const int i = i_next;
+      const uint32_t mask = mask_next;
+      const int32_t my_phys = phys_next;
+      if (k + 1 < num_active) {
+        i_next = active_rep_idx[k + 1];
+        mask_next = rep_mask_s[i_next];
+        phys_next = (lane < NUM_GPUS) ? rep_phys_s[i_next * NUM_GPUS + lane] : -1;
+      }
+      const bool eligible = (lane < NUM_GPUS) && (((mask >> lane) & 1u) != 0u);
+      const uint32_t key = eligible ? ((static_cast<uint32_t>(load) << 5) | lane) : 0xffffffffu;
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
+      const uint32_t best_key = __reduce_min_sync(0xffffffffu, key);
+#else
+      uint32_t best_key = key;
+#pragma unroll
+      for (int off = 16; off > 0; off >>= 1) {
+        best_key = min(best_key, __shfl_xor_sync(0xffffffffu, best_key, off));
+      }
+#endif
+      // A replicated expert always has >= 2 eligible ranks, so best_key is a
+      // real (load, rank) key; the winning lane records its own physical id.
+      if (key == best_key) {
+        ++load;
+        chosen_physical[rep_logical_s[i]] = my_phys;
+      }
+    }
+  }
+  __syncthreads();
+
+  for (int idx = threadIdx.x; idx < N; idx += BLOCK_DIM) {
+    const int l = in_topk_ids[idx];
+    out_topk_ids[idx] = l >= 0 ? chosen_physical[l] : -1;
+  }
+  if constexpr (WRITE_LOCAL_COUNTS) {
+    for (int l = threadIdx.x; l < NUM_LOGICAL; l += BLOCK_DIM) {
+      counts[l] = static_cast<float>(local_counts_s[l]);
+    }
+  }
+}
+
+template <int NUM_LOGICAL, int NUM_GPUS, int NUM_REPLICATED, int BLOCK_DIM, bool WRITE_LOCAL_COUNTS>
+void metro_route_v2_impl(
+    tvm::ffi::TensorView out_topk_ids,
+    tvm::ffi::TensorView in_topk_ids,
+    tvm::ffi::TensorView counts,
+    tvm::ffi::TensorView default_physical,
+    tvm::ffi::TensorView single_rank,
+    tvm::ffi::TensorView rep_logical,
+    tvm::ffi::TensorView rep_mask,
+    tvm::ffi::TensorView rep_phys) {
+  using namespace host;
+
+  SymbolicSize N{"num_topk_entries"};
+  SymbolicDevice device_;
+  TensorMatcher({N}).with_dtype<int32_t>().with_device<kDLCUDA>(device_)
+      .verify(out_topk_ids).verify(in_topk_ids);
+  TensorMatcher({NUM_LOGICAL}).with_dtype<float>().with_device<kDLCUDA>(device_).verify(counts);
+  TensorMatcher({NUM_LOGICAL}).with_dtype<int32_t>().with_device<kDLCUDA>(device_)
+      .verify(default_physical).verify(single_rank);
+  TensorMatcher({NUM_REPLICATED}).with_dtype<int32_t>().with_device<kDLCUDA>(device_)
+      .verify(rep_logical).verify(rep_mask);
+  TensorMatcher({NUM_REPLICATED * NUM_GPUS}).with_dtype<int32_t>().with_device<kDLCUDA>(device_)
+      .verify(rep_phys);
+
+  const DLDevice device = device_.unwrap();
+  auto kernel = metro_route_v2_kernel<NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, WRITE_LOCAL_COUNTS>;
+  LaunchKernel(/*grid=*/1, /*block=*/BLOCK_DIM, device)(
+      kernel,
+      static_cast<int32_t*>(out_topk_ids.data_ptr()),
+      static_cast<const int32_t*>(in_topk_ids.data_ptr()),
+      static_cast<float*>(counts.data_ptr()),
+      static_cast<const int32_t*>(default_physical.data_ptr()),
+      static_cast<const int32_t*>(single_rank.data_ptr()),
+      static_cast<const int32_t*>(rep_logical.data_ptr()),
+      static_cast<const int32_t*>(rep_mask.data_ptr()),
+      static_cast<const int32_t*>(rep_phys.data_ptr()),
+      static_cast<int>(N.unwrap()));
+}
+
+template <int NUM_LOGICAL, int NUM_GPUS, int NUM_REPLICATED, int BLOCK_DIM>
+void metro_route_v2(
+    tvm::ffi::TensorView out_topk_ids,
+    tvm::ffi::TensorView in_topk_ids,
+    tvm::ffi::TensorView counts,
+    tvm::ffi::TensorView default_physical,
+    tvm::ffi::TensorView single_rank,
+    tvm::ffi::TensorView rep_logical,
+    tvm::ffi::TensorView rep_mask,
+    tvm::ffi::TensorView rep_phys) {
+  metro_route_v2_impl<NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, false>(
+      out_topk_ids, in_topk_ids, counts, default_physical, single_rank, rep_logical, rep_mask, rep_phys);
+}
+
+template <int NUM_LOGICAL, int NUM_GPUS, int NUM_REPLICATED, int BLOCK_DIM>
+void metro_route_stale(
+    tvm::ffi::TensorView out_topk_ids,
+    tvm::ffi::TensorView in_topk_ids,
+    tvm::ffi::TensorView counts,
+    tvm::ffi::TensorView default_physical,
+    tvm::ffi::TensorView single_rank,
+    tvm::ffi::TensorView rep_logical,
+    tvm::ffi::TensorView rep_mask,
+    tvm::ffi::TensorView rep_phys) {
+  metro_route_v2_impl<NUM_LOGICAL, NUM_GPUS, NUM_REPLICATED, BLOCK_DIM, true>(
+      out_topk_ids, in_topk_ids, counts, default_physical, single_rank, rep_logical, rep_mask, rep_phys);
+}
+
 }  // namespace

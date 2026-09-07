@@ -21,6 +21,8 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+import os
+
 import torch
 
 logger = logging.getLogger(__name__)
@@ -55,6 +57,30 @@ def assert_lplb_supported_model(architecture: str) -> None:
             "all-reduce inside LPLBSolver.solve(), which would deadlock "
             "under DP-attention."
         )
+
+
+class _MetroAsyncState:
+    """Side stream carrying METRO's per-layer count all-reduce off the critical
+    path (SGLANG_METRO_COUNT_MODE=stale).  One per process."""
+
+    def __init__(self):
+        self.stream: Optional[torch.cuda.Stream] = None
+        self.pending = False
+        self.join_layer: Optional[int] = None
+
+
+_METRO_ASYNC = _MetroAsyncState()
+
+
+def metro_count_mode() -> str:
+    """sync: reduce this step's counts before assigning (paper semantics).
+    stale: assign from the previous decode step's reduced counts and reduce the
+    current ones on a side stream, hiding the collective behind the next layer."""
+    return os.environ.get("SGLANG_METRO_COUNT_MODE", "sync")
+
+
+def metro_kernel_version() -> str:
+    return os.environ.get("SGLANG_METRO_KERNEL", "v2")
 
 
 def get_global_lplb_solver(layer_id: int) -> Optional[LPLBSolver]:
@@ -228,6 +254,17 @@ class LPLBSolver:
             .to(torch.int32)
             .contiguous()
         )
+        # v2 METRO kernels read precomputed static tables (see cuda_solver).
+        from sglang.kernels.ops.lplb.cuda_solver import MetroStaticTables
+
+        self.metro_tables = MetroStaticTables(
+            self.decode_physical_by_rank, self.decode_rank_mask, self.decode_log_replicated
+        )
+        # Persistent per-layer count buffer.  sync mode: scratch for the
+        # reduced counts.  stale mode: holds the previous decode step's reduced
+        # global counts on entry and this step's local counts on exit.
+        self._metro_counts = torch.zeros(self.num_logical, dtype=torch.float32, device=device)
+        self.layer_id: Optional[int] = None
 
         # Pre-JIT-compile the fused IPM kernel for this (NC, NV) shape so the
         # 20-40s compile cost happens once at startup rather than on the first
@@ -423,9 +460,12 @@ class LPLBSolver:
 
     def solve_decode_metro(self, topk_ids: torch.Tensor) -> torch.Tensor:
         """All-reduce the current active set and apply METRO Algorithm 1."""
+        if metro_count_mode() == "stale":
+            return self._solve_decode_metro_stale(topk_ids)
         from sglang.kernels.ops.lplb.cuda_solver import (
             count_logical_f32,
             dispatch_decode_metro,
+            metro_route_v2,
         )
 
         # Fused count (one launch) instead of zeros + scatter_add_ + float().
@@ -434,17 +474,58 @@ class LPLBSolver:
             self.num_logical,
             self.num_gpus,
             self.decode_log_replicated.numel(),
+            out=self._metro_counts,
         )
         global_counts = (
             self.ep_group.all_reduce(local_counts) if self.ep_group is not None else local_counts
         )
-        return dispatch_decode_metro(
-            topk_ids,
-            global_counts,
-            self.decode_physical_by_rank,
-            self.decode_rank_mask,
-            self.decode_log_replicated,
-        )
+        if metro_kernel_version() == "v1":
+            return dispatch_decode_metro(
+                topk_ids,
+                global_counts,
+                self.decode_physical_by_rank,
+                self.decode_rank_mask,
+                self.decode_log_replicated,
+            )
+        return metro_route_v2(topk_ids, global_counts, self.metro_tables)
+
+    def _solve_decode_metro_stale(self, topk_ids: torch.Tensor) -> torch.Tensor:
+        """METRO from the previous decode step's global active set.
+
+        The assignment kernel reads ``_metro_counts`` (reduced during the
+        previous step), routes, and overwrites the buffer with this rank's local
+        counts.  The all-reduce of those counts runs on a side stream and is
+        joined one layer later (or at the last MoE layer for the final one), so
+        no collective sits between TopK and dispatch.  Every rank derives the
+        assignment from the same reduced buffer, so replicas stay consistent;
+        experts that were inactive in the previous step fall back to their
+        first replica.  Consecutive decode steps of the same sequences activate
+        strongly overlapping expert sets, which is what makes the stale set
+        useful; the imbalance-tax measurement decides whether it is enough.
+        """
+        from sglang.kernels.ops.lplb.cuda_solver import metro_route_stale
+
+        st = _METRO_ASYNC
+        main = torch.cuda.current_stream()
+        if st.stream is None:
+            st.stream = torch.cuda.Stream(device=topk_ids.device)
+        if st.pending:
+            # Previous layer's reduce must land before anyone reads its buffer
+            # next step; by now (~one layer later) it has long finished.
+            main.wait_stream(st.stream)
+            st.pending = False
+        out = metro_route_stale(topk_ids, self._metro_counts, self.metro_tables)
+        if self.ep_group is not None:
+            st.stream.wait_stream(main)
+            with torch.cuda.stream(st.stream):
+                self.ep_group.all_reduce(self._metro_counts)
+            st.pending = True
+            if st.join_layer is not None and self.layer_id == st.join_layer:
+                # Last MoE layer of the forward: rejoin so CUDA-graph capture
+                # ends with no forked stream (costs one exposed reduce/step).
+                main.wait_stream(st.stream)
+                st.pending = False
+        return out
 
     def mark_metro_allgather_decode(self) -> None:
         self._metro_allgather_pending = True

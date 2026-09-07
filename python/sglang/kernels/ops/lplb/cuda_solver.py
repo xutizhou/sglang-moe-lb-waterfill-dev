@@ -304,8 +304,53 @@ def _dispatch_decode_integral_module(
                 "dispatch_decode_metro_p2p",
                 f"dispatch_decode_metro_p2p<{args}>",
             ),
+            ("metro_route_v2", f"metro_route_v2<{args}>"),
+            ("metro_route_stale", f"metro_route_stale<{args}>"),
         ],
     )
+
+
+class MetroStaticTables:
+    """Per-layer static tables for the v2 METRO kernels (see metro_route_v2)."""
+
+    def __init__(self, physical_by_rank: torch.Tensor, rank_mask: torch.Tensor, replicated_logical: torch.Tensor):
+        assert physical_by_rank.dtype == torch.int32 and rank_mask.dtype == torch.int32
+        self.num_logical, self.num_gpus = physical_by_rank.shape
+        has_copy = physical_by_rank >= 0
+        first_rank = has_copy.to(torch.int32).argmax(dim=1)
+        self.default_physical = physical_by_rank.gather(1, first_rank.view(-1, 1)).view(-1).to(torch.int32).contiguous()
+        num_copies = has_copy.sum(dim=1)
+        self.single_rank = torch.where(num_copies == 1, first_rank, torch.full_like(first_rank, -1)).to(torch.int32).contiguous()
+        self.rep_logical = replicated_logical.to(torch.int32).contiguous()
+        self.num_replicated = int(self.rep_logical.numel())
+        self.rep_mask = rank_mask[self.rep_logical.long()].to(torch.int32).contiguous()
+        self.rep_phys = physical_by_rank[self.rep_logical.long()].reshape(-1).to(torch.int32).contiguous()
+
+
+def _metro_v2_launch(name: str, topk_ids: torch.Tensor, counts: torch.Tensor, tables: MetroStaticTables) -> torch.Tensor:
+    if not topk_ids.is_cuda:
+        raise RuntimeError(f"{name} requires CUDA tensors; got topk_ids on {topk_ids.device}.")
+    original_shape = topk_ids.shape
+    flat_ids = topk_ids.reshape(-1).contiguous().to(torch.int32)
+    assert counts.shape == (tables.num_logical,) and counts.dtype == torch.float32
+    out = torch.empty(flat_ids.shape[0], dtype=torch.int32, device=topk_ids.device)
+    module = _dispatch_decode_integral_module(tables.num_logical, tables.num_gpus, tables.num_replicated, DISPATCH_BLOCK_DIM)
+    getattr(module, name)(
+        out, flat_ids, counts,
+        tables.default_physical, tables.single_rank, tables.rep_logical, tables.rep_mask, tables.rep_phys,
+    )
+    return out.view(original_shape).to(topk_ids.dtype)
+
+
+def metro_route_v2(topk_ids: torch.Tensor, global_counts: torch.Tensor, tables: MetroStaticTables) -> torch.Tensor:
+    """METRO assignment + routing from reduced global counts (warp-parallel greedy)."""
+    return _metro_v2_launch("metro_route_v2", topk_ids, global_counts, tables)
+
+
+def metro_route_stale(topk_ids: torch.Tensor, counts: torch.Tensor, tables: MetroStaticTables) -> torch.Tensor:
+    """Route with the counts in ``counts`` (previous step's global active set),
+    then overwrite ``counts`` with this rank's local counts for the current step."""
+    return _metro_v2_launch("metro_route_stale", topk_ids, counts, tables)
 
 
 def dispatch_decode_integral(

@@ -109,7 +109,13 @@ def init_lplb_solvers(*, model_config: ModelConfig) -> None:
             solver.initialize_decode_p2p()
         elif decode_load_metric == "active_experts_prior":
             solver.initialize_decode_all_active()
+        solver.layer_id = lid
         set_global_lplb_solver(lid, solver)
+    from sglang.srt.eplb.lplb_solver import _METRO_ASYNC
+
+    # The last layer with a solver is the last MoE layer of the forward; the
+    # stale-count METRO variant rejoins its side stream there.
+    _METRO_ASYNC.join_layer = metadata.num_layers - 1
     logger.info(f"Initialized LPLB solvers for {metadata.num_layers} layers")
 
 
