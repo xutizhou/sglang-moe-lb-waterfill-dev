@@ -1,0 +1,9 @@
+ep16_none_v2/00_base_plain_static_0 41.48 38.76 38.87 median 38.87
+ep16_none_v2/00_base_plain_static_128 48.16 45.29 45.39 median 45.39
+ep16_none_v2/00_base_plain_static_32 42.58 39.73 39.78 median 39.78
+ep16_none_v2/00_base_plain_static_64 42.91 42.38 42.61 median 42.61
+ep16_none_v2/00_static_metro_128 43.33 40.14 40.04 median 40.14
+ep16_none_v2/00_static_metro_32 41.04 38.41 38.31 median 38.41
+ep16_none_v2/00_static_metro_64 43.59 40.66 40.10 median 40.66
+ep16_none_v3/00_static_metro_128 40.24 37.52 37.68 median 37.68
+ep16_none_v3/00_static_metro_64 40.63 37.70 38.15 median 38.15

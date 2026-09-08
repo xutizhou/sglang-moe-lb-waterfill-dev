@@ -1,0 +1,261 @@
+{
+  "runs": [
+    {
+      "run": "00_static_global",
+      "mode": "static_global",
+      "samples": [
+        {
+          "duration_s": 7.284,
+          "tok_per_s": 4498.67,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 7.288,
+          "tok_per_s": 4496.24,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 7.273,
+          "tok_per_s": 4505.45,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 7.284,
+      "median_tok_per_s": 4498.67,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "01_metro",
+      "mode": "metro",
+      "samples": [
+        {
+          "duration_s": 6.95,
+          "tok_per_s": 4714.74,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 6.844,
+          "tok_per_s": 4788.1,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 6.99,
+          "tok_per_s": 4687.9,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 6.95,
+      "median_tok_per_s": 4714.74,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "02_dynamic_random",
+      "mode": "dynamic_random",
+      "samples": [
+        {
+          "duration_s": 7.633,
+          "tok_per_s": 4292.96,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 7.603,
+          "tok_per_s": 4310.0,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 7.56,
+          "tok_per_s": 4334.5,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 7.603,
+      "median_tok_per_s": 4310.0,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "03_static_global",
+      "mode": "static_global",
+      "samples": [
+        {
+          "duration_s": 7.235,
+          "tok_per_s": 4528.86,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 7.284,
+          "tok_per_s": 4498.54,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 7.264,
+          "tok_per_s": 4510.76,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 7.264,
+      "median_tok_per_s": 4510.76,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "04_metro",
+      "mode": "metro",
+      "samples": [
+        {
+          "duration_s": 6.934,
+          "tok_per_s": 4725.75,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 6.927,
+          "tok_per_s": 4730.74,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 6.956,
+          "tok_per_s": 4710.79,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 6.934,
+      "median_tok_per_s": 4725.75,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "05_dynamic_random",
+      "mode": "dynamic_random",
+      "samples": [
+        {
+          "duration_s": 7.6,
+          "tok_per_s": 4311.46,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 7.466,
+          "tok_per_s": 4388.73,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 7.597,
+          "tok_per_s": 4313.18,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 7.597,
+      "median_tok_per_s": 4313.18,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    }
+  ],
+  "summary": {
+    "static_global": {
+      "containers": 2,
+      "samples": 6,
+      "median_duration_s": 7.278499999999999,
+      "mean_duration_s": 7.271333333333334,
+      "min_duration_s": 7.235,
+      "max_duration_s": 7.288,
+      "process_medians_s": [
+        7.284,
+        7.264
+      ],
+      "median_tok_per_s": 4502.0599999999995
+    },
+    "metro": {
+      "containers": 2,
+      "samples": 6,
+      "median_duration_s": 6.942,
+      "mean_duration_s": 6.9334999999999996,
+      "min_duration_s": 6.844,
+      "max_duration_s": 6.99,
+      "process_medians_s": [
+        6.95,
+        6.934
+      ],
+      "median_tok_per_s": 4720.245
+    },
+    "dynamic_random": {
+      "containers": 2,
+      "samples": 6,
+      "median_duration_s": 7.5985,
+      "mean_duration_s": 7.5765,
+      "min_duration_s": 7.466,
+      "max_duration_s": 7.633,
+      "process_medians_s": [
+        7.603,
+        7.597
+      ],
+      "median_tok_per_s": 4312.32
+    }
+  },
+  "comparisons": {
+    "metro": {
+      "latency_delta_pct": -4.623205330768688,
+      "throughput_delta_pct": 4.846337010168678,
+      "adjacent_pair_latency_deltas_pct": [
+        -4.585392641405816,
+        -4.542951541850226
+      ]
+    },
+    "dynamic_random": {
+      "latency_delta_pct": 4.396510269973208,
+      "throughput_delta_pct": -4.214515133072416,
+      "adjacent_pair_latency_deltas_pct": [
+        4.37946183415705,
+        4.58425110132159
+      ]
+    }
+  }
+}

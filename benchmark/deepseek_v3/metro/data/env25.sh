@@ -1,0 +1,9 @@
+export IMAGE=lmsysorg/sglang:metro-repro
+export REPO=/raid/xutingz/repo/metro_decode_fused_20260903
+export MODEL=/raid/xutingz/models/DeepSeek-V3-8L-waterfill
+export EXPERT_LOCATION=/raid/xutingz/bench/ep4_8l_logical_count.pt
+export DATA_MOUNT=/raid
+export TRITON_CACHE=/raid/xutingz/cache/decode_waterfill_triton_cache
+export DEEP_GEMM_CACHE=/raid/xutingz/cache/decode_waterfill_deep_gemm_cache
+export REAL_CLIENT=/raid/xutingz/bench/real_prompt_client.py
+export GPU_DEVICES=0,1,2,3

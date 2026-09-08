@@ -1,0 +1,105 @@
+{
+  "runs": [
+    {
+      "run": "00_base_plain_static_16",
+      "mode": "base:plain_static@16",
+      "samples": [
+        {
+          "duration_s": 46.138,
+          "tok_per_s": 710.22,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 47.324,
+          "tok_per_s": 692.41,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 47.277,
+          "tok_per_s": 693.11,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 47.277,
+      "median_tok_per_s": 693.11,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "01_static_metro_16",
+      "mode": "static:metro@16",
+      "samples": [
+        {
+          "duration_s": 44.921,
+          "tok_per_s": 729.46,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 44.822,
+          "tok_per_s": 731.06,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 45.078,
+          "tok_per_s": 726.91,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 44.921,
+      "median_tok_per_s": 729.46,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    }
+  ],
+  "summary": {
+    "base:plain_static@16": {
+      "containers": 1,
+      "samples": 3,
+      "median_duration_s": 47.277,
+      "mean_duration_s": 46.913000000000004,
+      "min_duration_s": 46.138,
+      "max_duration_s": 47.324,
+      "process_medians_s": [
+        47.277
+      ],
+      "median_tok_per_s": 693.11
+    },
+    "static:metro@16": {
+      "containers": 1,
+      "samples": 3,
+      "median_duration_s": 44.921,
+      "mean_duration_s": 44.940333333333335,
+      "min_duration_s": 44.822,
+      "max_duration_s": 45.078,
+      "process_medians_s": [
+        44.921
+      ],
+      "median_tok_per_s": 729.46
+    }
+  },
+  "comparisons": {
+    "static:metro@16": {
+      "latency_delta_pct": -4.983395731539653,
+      "throughput_delta_pct": 5.24447778851842,
+      "adjacent_pair_latency_deltas_pct": [
+        -4.983395731539653
+      ]
+    }
+  }
+}

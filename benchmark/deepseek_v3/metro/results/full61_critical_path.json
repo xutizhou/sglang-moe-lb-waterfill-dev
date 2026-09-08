@@ -1,0 +1,344 @@
+{
+  "baseline": {
+    "analysis": {
+      "all_stages": {
+        "critical_path_excess_over_mean_pct": 12.700050200599279,
+        "grouped_gemm_max_of_rank_sum_ms": 48.318233398437506,
+        "grouped_gemm_sum_of_rank_max_ms": 53.0653486328125,
+        "grouped_gemm_sum_of_rank_mean_ms": 47.085470271183894
+      },
+      "stages": {
+        "0": {
+          "codex_metric_excess_over_mean_pct": 2.333182171338466,
+          "critical_path_excess_over_mean_pct": 12.867659918091,
+          "grouped_gemm_max_of_rank_sum_ms": 21.87414723557693,
+          "grouped_gemm_sum_of_rank_max_ms": 24.125936072716343,
+          "grouped_gemm_sum_of_rank_mean_ms": 21.37541975285457,
+          "grouped_gemm_sum_of_rank_min_ms": 18.734499699519237,
+          "hidden_imbalance_pct": 10.294293134669118,
+          "layers_per_step": 27,
+          "num_steps_skipped_inconsistent_layers": 0,
+          "num_steps_used": 13,
+          "per_layer_max_over_mean_minus_1": {
+            "mean_pct": 12.96680204481517,
+            "p50_pct": 11.922398011238865,
+            "p90_pct": 22.44265987154921
+          },
+          "per_rank_mean_sum_ms": [
+            21.385610201322116,
+            21.066143329326927,
+            21.57972648737981,
+            21.470198993389427
+          ],
+          "ranks": [
+            "static61r2-1788519519.7409847-TP-0-DP-0-PP-0-EP-0.trace.json.gz",
+            "static61r2-1788519519.7409847-TP-1-DP-1-PP-0-EP-1.trace.json.gz",
+            "static61r2-1788519519.7409847-TP-2-DP-2-PP-0-EP-2.trace.json.gz",
+            "static61r2-1788519519.7409847-TP-3-DP-3-PP-0-EP-3.trace.json.gz"
+          ],
+          "slowest_rank_histogram": {
+            "0": 81,
+            "1": 78,
+            "2": 96,
+            "3": 96
+          },
+          "utilisation": {
+            "gpu_busy_fraction": [
+              0.17791884478111983,
+              0.3511622133021177,
+              0.3334936592677224,
+              0.3158358967907105
+            ],
+            "gpu_busy_ms": [
+              38.86329627403847,
+              76.70691361177884,
+              72.84509945913462,
+              68.98595590444712
+            ],
+            "nccl_busy_ms": [
+              10.400250375600962,
+              48.72896935096154,
+              44.31464565805289,
+              40.559618088942315
+            ],
+            "non_nccl_busy_fraction": [
+              0.130440801835561,
+              0.12823480430459003,
+              0.13076849521600067,
+              0.13029482678228074
+            ],
+            "non_nccl_busy_ms": [
+              28.49253846153846,
+              28.01125999098558,
+              28.563793569711535,
+              28.45944133112981
+            ],
+            "step_span_ms": [
+              218.4327147686298,
+              218.4372654747596,
+              218.43023828125004,
+              218.42341736778846
+            ]
+          },
+          "warnings": []
+        },
+        "1": {
+          "codex_metric_excess_over_mean_pct": 2.855053295239296,
+          "critical_path_excess_over_mean_pct": 12.560698935478687,
+          "grouped_gemm_max_of_rank_sum_ms": 26.444086162860575,
+          "grouped_gemm_sum_of_rank_max_ms": 28.939412560096155,
+          "grouped_gemm_sum_of_rank_mean_ms": 25.71005051832933,
+          "grouped_gemm_sum_of_rank_min_ms": 22.54914685997596,
+          "hidden_imbalance_pct": 9.436236071338122,
+          "layers_per_step": 31,
+          "num_steps_skipped_inconsistent_layers": 0,
+          "num_steps_used": 13,
+          "per_layer_max_over_mean_minus_1": {
+            "mean_pct": 12.635319794369401,
+            "p50_pct": 12.093435378358453,
+            "p90_pct": 21.07328000225688
+          },
+          "per_rank_mean_sum_ms": [
+            25.692576171874997,
+            25.637552358774045,
+            25.167375075120198,
+            26.342698467548075
+          ],
+          "ranks": [
+            "static61r2-1788519519.7409847-TP-0-DP-0-PP-1-EP-0.trace.json.gz",
+            "static61r2-1788519519.7409847-TP-1-DP-1-PP-1-EP-1.trace.json.gz",
+            "static61r2-1788519519.7409847-TP-2-DP-2-PP-1-EP-2.trace.json.gz",
+            "static61r2-1788519519.7409847-TP-3-DP-3-PP-1-EP-3.trace.json.gz"
+          ],
+          "slowest_rank_histogram": {
+            "0": 88,
+            "1": 99,
+            "2": 81,
+            "3": 135
+          },
+          "utilisation": {
+            "gpu_busy_fraction": [
+              0.31214120190702055,
+              0.35182421394220414,
+              0.39787990713992005,
+              0.17058757543885117
+            ],
+            "gpu_busy_ms": [
+              68.17519463641827,
+              76.84429807692308,
+              86.90121416766827,
+              37.25654311899039
+            ],
+            "nccl_busy_ms": [
+              34.800034405048066,
+              43.61834104567307,
+              54.25124887319713,
+              3.2583823617788457
+            ],
+            "non_nccl_busy_fraction": [
+              0.15280869653570825,
+              0.1521218425769899,
+              0.1494888798034657,
+              0.15566832903498257
+            ],
+            "non_nccl_busy_ms": [
+              33.37516023137019,
+              33.22595703125,
+              32.64996529447115,
+              33.99816075721154
+            ],
+            "step_span_ms": [
+              218.41139272836543,
+              218.41674060997593,
+              218.4106626352163,
+              218.4012699819711
+            ]
+          },
+          "warnings": []
+        }
+      }
+    },
+    "dir": "/lustre/raplab/client/xutingz/workspace/bench/metro_decode_full61_20260904/profile_static_manual_r2"
+  },
+  "candidate": {
+    "analysis": {
+      "all_stages": {
+        "critical_path_excess_over_mean_pct": 6.077150608527582,
+        "grouped_gemm_max_of_rank_sum_ms": 47.743121168870196,
+        "grouped_gemm_sum_of_rank_max_ms": 49.83364918870191,
+        "grouped_gemm_sum_of_rank_mean_ms": 46.978683819110586
+      },
+      "stages": {
+        "0": {
+          "codex_metric_excess_over_mean_pct": 2.020820381379962,
+          "critical_path_excess_over_mean_pct": 6.5683481049665815,
+          "grouped_gemm_max_of_rank_sum_ms": 21.61144140625,
+          "grouped_gemm_sum_of_rank_max_ms": 22.5747607421875,
+          "grouped_gemm_sum_of_rank_mean_ms": 21.18336367563101,
+          "grouped_gemm_sum_of_rank_min_ms": 19.790327223557693,
+          "hidden_imbalance_pct": 4.457450652314687,
+          "layers_per_step": 27,
+          "num_steps_skipped_inconsistent_layers": 0,
+          "num_steps_used": 13,
+          "per_layer_max_over_mean_minus_1": {
+            "mean_pct": 6.63480073323694,
+            "p50_pct": 5.811401368476532,
+            "p90_pct": 12.694185262699564
+          },
+          "per_rank_mean_sum_ms": [
+            21.043906174879808,
+            20.850985126201923,
+            21.56968479567308,
+            21.268878605769228
+          ],
+          "ranks": [
+            "metro61-1788518617.7558448-TP-0-DP-0-PP-0-EP-0.trace.json.gz",
+            "metro61-1788518617.7558448-TP-1-DP-1-PP-0-EP-1.trace.json.gz",
+            "metro61-1788518617.7558448-TP-2-DP-2-PP-0-EP-2.trace.json.gz",
+            "metro61-1788518617.7558448-TP-3-DP-3-PP-0-EP-3.trace.json.gz"
+          ],
+          "slowest_rank_histogram": {
+            "0": 80,
+            "1": 72,
+            "2": 116,
+            "3": 83
+          },
+          "utilisation": {
+            "gpu_busy_fraction": [
+              0.34929804121913927,
+              0.15521377893190794,
+              0.41260453267663055,
+              0.24730830006337912
+            ],
+            "gpu_busy_ms": [
+              76.38182459435096,
+              33.93966173377404,
+              90.21963912259616,
+              54.07671867487981
+            ],
+            "nccl_busy_ms": [
+              48.31882249098557,
+              5.798570462740386,
+              61.71892848557692,
+              25.52135637019231
+            ],
+            "non_nccl_busy_fraction": [
+              0.12852263448551482,
+              0.1288308135592649,
+              0.13048034031895187,
+              0.13073209528052607
+            ],
+            "non_nccl_busy_ms": [
+              28.104346905048082,
+              28.170657677283653,
+              28.53068321814904,
+              28.586031024639418
+            ],
+            "step_span_ms": [
+              218.67235306490386,
+              218.66397408353365,
+              218.65886576021634,
+              218.66115557391828
+            ]
+          },
+          "warnings": []
+        },
+        "1": {
+          "codex_metric_excess_over_mean_pct": 1.3039559783313948,
+          "critical_path_excess_over_mean_pct": 5.67377452535629,
+          "grouped_gemm_max_of_rank_sum_ms": 26.131679762620195,
+          "grouped_gemm_sum_of_rank_max_ms": 27.258888446514415,
+          "grouped_gemm_sum_of_rank_mean_ms": 25.79532014347957,
+          "grouped_gemm_sum_of_rank_min_ms": 24.381907977764424,
+          "hidden_imbalance_pct": 4.3135714739112485,
+          "layers_per_step": 31,
+          "num_steps_skipped_inconsistent_layers": 0,
+          "num_steps_used": 13,
+          "per_layer_max_over_mean_minus_1": {
+            "mean_pct": 5.717426837404917,
+            "p50_pct": 5.0529668530016725,
+            "p90_pct": 11.830774183190051
+          },
+          "per_rank_mean_sum_ms": [
+            25.823691256009617,
+            25.456143629807688,
+            26.055191105769232,
+            25.846254582331735
+          ],
+          "ranks": [
+            "metro61-1788518617.7558448-TP-0-DP-0-PP-1-EP-0.trace.json.gz",
+            "metro61-1788518617.7558448-TP-1-DP-1-PP-1-EP-1.trace.json.gz",
+            "metro61-1788518617.7558448-TP-2-DP-2-PP-1-EP-2.trace.json.gz",
+            "metro61-1788518617.7558448-TP-3-DP-3-PP-1-EP-3.trace.json.gz"
+          ],
+          "slowest_rank_histogram": {
+            "0": 122,
+            "1": 80,
+            "2": 126,
+            "3": 75
+          },
+          "utilisation": {
+            "gpu_busy_fraction": [
+              0.17181140314250734,
+              0.3288149477917637,
+              0.2995831755454974,
+              0.27294324460564284
+            ],
+            "gpu_busy_ms": [
+              37.56963949819712,
+              71.90390459735578,
+              65.5150625751202,
+              59.687837665264425
+            ],
+            "nccl_busy_ms": [
+              3.859242412860577,
+              38.4987549579327,
+              31.47937605168269,
+              25.82324519230769
+            ],
+            "non_nccl_busy_fraction": [
+              0.1541625286024024,
+              0.15276100228730677,
+              0.15563625599641412,
+              0.1548575406375578
+            ],
+            "non_nccl_busy_ms": [
+              33.71039708533654,
+              33.40514963942308,
+              34.0356865234375,
+              33.86459247295673
+            ],
+            "step_span_ms": [
+              218.66790452223557,
+              218.67589986478364,
+              218.6873894230769,
+              218.68223099459132
+            ]
+          },
+          "warnings": []
+        }
+      }
+    },
+    "dir": "/lustre/raplab/client/xutingz/workspace/bench/metro_decode_full61_20260904/profile_metro_manual"
+  },
+  "comparison": {
+    "codex_metric_max_of_rank_sum": {
+      "baseline_ms": 48.318233398437506,
+      "candidate_ms": 47.743121168870196,
+      "delta_ms": -0.5751122295673099,
+      "delta_pct": -1.1902592233140497
+    },
+    "critical_path_sum_of_rank_max": {
+      "baseline_ms": 53.0653486328125,
+      "candidate_ms": 49.83364918870191,
+      "delta_ms": -3.231699444110589,
+      "delta_pct": -6.0900371473528665
+    },
+    "total_work_sum_of_rank_mean": {
+      "baseline_ms": 47.085470271183894,
+      "candidate_ms": 46.978683819110586,
+      "delta_ms": -0.10678645207330817,
+      "delta_pct": -0.2267927907659839
+    }
+  }
+}

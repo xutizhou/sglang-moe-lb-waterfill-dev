@@ -1,0 +1,4 @@
+ep16_deepep_v2sync/00_static_metro_128/ 42.21 36.93 36.95 median 36.95
+ep16_deepep_v2sync/00_static_metro_64/ 42.86 37.54 38.36 median 38.36
+ep16_deepep_stale/00_static_metro_128/ 42.81 37.81 37.99 median 37.99
+ep16_deepep_stale3/00_static_metro_128/ 42.38 37.85 37.16 median 37.85

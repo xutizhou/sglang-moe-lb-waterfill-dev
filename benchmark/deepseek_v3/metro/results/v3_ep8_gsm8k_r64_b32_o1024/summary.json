@@ -1,0 +1,261 @@
+{
+  "runs": [
+    {
+      "run": "00_static_global",
+      "mode": "static_global",
+      "samples": [
+        {
+          "duration_s": 46.808,
+          "tok_per_s": 700.05,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 46.949,
+          "tok_per_s": 697.94,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 45.984,
+          "tok_per_s": 712.59,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 46.808,
+      "median_tok_per_s": 700.05,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "01_metro",
+      "mode": "metro",
+      "samples": [
+        {
+          "duration_s": 43.785,
+          "tok_per_s": 748.39,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 43.294,
+          "tok_per_s": 756.88,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 43.706,
+          "tok_per_s": 749.74,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 43.706,
+      "median_tok_per_s": 749.74,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "02_static",
+      "mode": "static",
+      "samples": [
+        {
+          "duration_s": 49.265,
+          "tok_per_s": 665.14,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 49.624,
+          "tok_per_s": 660.33,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 48.955,
+          "tok_per_s": 669.34,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 49.265,
+      "median_tok_per_s": 665.14,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "03_static_global",
+      "mode": "static_global",
+      "samples": [
+        {
+          "duration_s": 46.88,
+          "tok_per_s": 698.98,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 47.029,
+          "tok_per_s": 696.76,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 46.564,
+          "tok_per_s": 703.73,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 46.88,
+      "median_tok_per_s": 698.98,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "04_metro",
+      "mode": "metro",
+      "samples": [
+        {
+          "duration_s": 43.534,
+          "tok_per_s": 752.7,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 43.469,
+          "tok_per_s": 753.82,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 43.569,
+          "tok_per_s": 752.1,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 43.534,
+      "median_tok_per_s": 752.7,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "05_static",
+      "mode": "static",
+      "samples": [
+        {
+          "duration_s": 49.052,
+          "tok_per_s": 668.03,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 48.771,
+          "tok_per_s": 671.87,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 49.072,
+          "tok_per_s": 667.75,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 49.052,
+      "median_tok_per_s": 668.03,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    }
+  ],
+  "summary": {
+    "static_global": {
+      "containers": 2,
+      "samples": 6,
+      "median_duration_s": 46.844,
+      "mean_duration_s": 46.702333333333335,
+      "min_duration_s": 45.984,
+      "max_duration_s": 47.029,
+      "process_medians_s": [
+        46.808,
+        46.88
+      ],
+      "median_tok_per_s": 699.515
+    },
+    "metro": {
+      "containers": 2,
+      "samples": 6,
+      "median_duration_s": 43.551500000000004,
+      "mean_duration_s": 43.55949999999999,
+      "min_duration_s": 43.294,
+      "max_duration_s": 43.785,
+      "process_medians_s": [
+        43.706,
+        43.534
+      ],
+      "median_tok_per_s": 752.4000000000001
+    },
+    "static": {
+      "containers": 2,
+      "samples": 6,
+      "median_duration_s": 49.062,
+      "mean_duration_s": 49.12316666666667,
+      "min_duration_s": 48.771,
+      "max_duration_s": 49.624,
+      "process_medians_s": [
+        49.265,
+        49.052
+      ],
+      "median_tok_per_s": 667.89
+    }
+  },
+  "comparisons": {
+    "metro": {
+      "latency_delta_pct": -7.0286482793954335,
+      "throughput_delta_pct": 7.5602381650143435,
+      "adjacent_pair_latency_deltas_pct": [
+        -6.627072295334124,
+        -7.137372013651888
+      ]
+    },
+    "static": {
+      "latency_delta_pct": 4.734864657159932,
+      "throughput_delta_pct": -4.520989542754627,
+      "adjacent_pair_latency_deltas_pct": [
+        5.2491027174842,
+        4.633105802047766
+      ]
+    }
+  }
+}

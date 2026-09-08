@@ -1,0 +1,261 @@
+{
+  "runs": [
+    {
+      "run": "00_static_global",
+      "mode": "static_global",
+      "samples": [
+        {
+          "duration_s": 7.14,
+          "tok_per_s": 4586.4,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 7.14,
+          "tok_per_s": 4590.8,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 7.03,
+          "tok_per_s": 4661.77,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 7.14,
+      "median_tok_per_s": 4590.8,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "01_metro",
+      "mode": "metro",
+      "samples": [
+        {
+          "duration_s": 6.82,
+          "tok_per_s": 4806.01,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 6.82,
+          "tok_per_s": 4804.73,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 6.72,
+          "tok_per_s": 4873.15,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 6.82,
+      "median_tok_per_s": 4806.01,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "02_static",
+      "mode": "static",
+      "samples": [
+        {
+          "duration_s": 7.51,
+          "tok_per_s": 4363.72,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 7.47,
+          "tok_per_s": 4383.76,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 7.36,
+          "tok_per_s": 4452.89,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 7.47,
+      "median_tok_per_s": 4383.76,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "03_static_global",
+      "mode": "static_global",
+      "samples": [
+        {
+          "duration_s": 7.16,
+          "tok_per_s": 4573.57,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 7.13,
+          "tok_per_s": 4593.65,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 7.02,
+          "tok_per_s": 4669.3,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 7.13,
+      "median_tok_per_s": 4593.65,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "04_metro",
+      "mode": "metro",
+      "samples": [
+        {
+          "duration_s": 6.82,
+          "tok_per_s": 4802.24,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 6.82,
+          "tok_per_s": 4802.18,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 6.73,
+          "tok_per_s": 4872.35,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 6.82,
+      "median_tok_per_s": 4802.24,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "05_static",
+      "mode": "static",
+      "samples": [
+        {
+          "duration_s": 7.48,
+          "tok_per_s": 4381.53,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 7.49,
+          "tok_per_s": 4372.92,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 7.37,
+          "tok_per_s": 4444.86,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 7.48,
+      "median_tok_per_s": 4381.53,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    }
+  ],
+  "summary": {
+    "static_global": {
+      "containers": 2,
+      "samples": 6,
+      "median_duration_s": 7.135,
+      "mean_duration_s": 7.103333333333333,
+      "min_duration_s": 7.02,
+      "max_duration_s": 7.16,
+      "process_medians_s": [
+        7.14,
+        7.13
+      ],
+      "median_tok_per_s": 4592.225
+    },
+    "metro": {
+      "containers": 2,
+      "samples": 6,
+      "median_duration_s": 6.82,
+      "mean_duration_s": 6.788333333333334,
+      "min_duration_s": 6.72,
+      "max_duration_s": 6.82,
+      "process_medians_s": [
+        6.82,
+        6.82
+      ],
+      "median_tok_per_s": 4805.37
+    },
+    "static": {
+      "containers": 2,
+      "samples": 6,
+      "median_duration_s": 7.475,
+      "mean_duration_s": 7.446666666666666,
+      "min_duration_s": 7.36,
+      "max_duration_s": 7.51,
+      "process_medians_s": [
+        7.47,
+        7.48
+      ],
+      "median_tok_per_s": 4382.645
+    }
+  },
+  "comparisons": {
+    "metro": {
+      "latency_delta_pct": -4.41485634197617,
+      "throughput_delta_pct": 4.64143198558431,
+      "adjacent_pair_latency_deltas_pct": [
+        -4.4817927170868295,
+        -4.347826086956519
+      ]
+    },
+    "static": {
+      "latency_delta_pct": 4.7652417659425295,
+      "throughput_delta_pct": -4.5638007719569496,
+      "adjacent_pair_latency_deltas_pct": [
+        4.621848739495804,
+        4.908835904628339
+      ]
+    }
+  }
+}

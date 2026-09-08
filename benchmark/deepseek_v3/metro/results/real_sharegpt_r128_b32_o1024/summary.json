@@ -1,0 +1,261 @@
+{
+  "runs": [
+    {
+      "run": "00_static_global",
+      "mode": "static_global",
+      "samples": [
+        {
+          "duration_s": 7.278,
+          "tok_per_s": 4502.53,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 7.336,
+          "tok_per_s": 4466.55,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 7.321,
+          "tok_per_s": 4475.66,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 7.321,
+      "median_tok_per_s": 4475.66,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "01_metro",
+      "mode": "metro",
+      "samples": [
+        {
+          "duration_s": 6.994,
+          "tok_per_s": 4684.91,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 7.015,
+          "tok_per_s": 4671.21,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 6.98,
+          "tok_per_s": 4694.57,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 6.994,
+      "median_tok_per_s": 4684.91,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "02_static",
+      "mode": "static",
+      "samples": [
+        {
+          "duration_s": 7.866,
+          "tok_per_s": 4166.03,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 7.849,
+          "tok_per_s": 4174.73,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 7.795,
+          "tok_per_s": 4203.71,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 7.849,
+      "median_tok_per_s": 4174.73,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "03_static_global",
+      "mode": "static_global",
+      "samples": [
+        {
+          "duration_s": 7.375,
+          "tok_per_s": 4442.87,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 7.33,
+          "tok_per_s": 4470.48,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 7.27,
+          "tok_per_s": 4507.17,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 7.33,
+      "median_tok_per_s": 4470.48,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "04_metro",
+      "mode": "metro",
+      "samples": [
+        {
+          "duration_s": 7.014,
+          "tok_per_s": 4671.74,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 6.958,
+          "tok_per_s": 4709.14,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 6.97,
+          "tok_per_s": 4701.21,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 6.97,
+      "median_tok_per_s": 4701.21,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "05_static",
+      "mode": "static",
+      "samples": [
+        {
+          "duration_s": 7.819,
+          "tok_per_s": 4190.72,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 7.791,
+          "tok_per_s": 4206.04,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 7.843,
+          "tok_per_s": 4178.02,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 7.819,
+      "median_tok_per_s": 4190.72,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    }
+  ],
+  "summary": {
+    "static_global": {
+      "containers": 2,
+      "samples": 6,
+      "median_duration_s": 7.3255,
+      "mean_duration_s": 7.3183333333333325,
+      "min_duration_s": 7.27,
+      "max_duration_s": 7.375,
+      "process_medians_s": [
+        7.321,
+        7.33
+      ],
+      "median_tok_per_s": 4473.07
+    },
+    "metro": {
+      "containers": 2,
+      "samples": 6,
+      "median_duration_s": 6.987,
+      "mean_duration_s": 6.988499999999999,
+      "min_duration_s": 6.958,
+      "max_duration_s": 7.015,
+      "process_medians_s": [
+        6.994,
+        6.97
+      ],
+      "median_tok_per_s": 4689.74
+    },
+    "static": {
+      "containers": 2,
+      "samples": 6,
+      "median_duration_s": 7.8309999999999995,
+      "mean_duration_s": 7.827166666666667,
+      "min_duration_s": 7.791,
+      "max_duration_s": 7.866,
+      "process_medians_s": [
+        7.849,
+        7.819
+      ],
+      "median_tok_per_s": 4184.370000000001
+    }
+  },
+  "comparisons": {
+    "metro": {
+      "latency_delta_pct": -4.620844993515794,
+      "throughput_delta_pct": 4.843876800497204,
+      "adjacent_pair_latency_deltas_pct": [
+        -4.466602923097939,
+        -4.911323328785821
+      ]
+    },
+    "static": {
+      "latency_delta_pct": 6.900552863285769,
+      "throughput_delta_pct": -6.454180238628037,
+      "adjacent_pair_latency_deltas_pct": [
+        7.212129490506758,
+        6.671214188267394
+      ]
+    }
+  }
+}

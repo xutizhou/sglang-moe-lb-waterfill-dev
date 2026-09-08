@@ -1,0 +1,8 @@
+ep16_deepep_v1/00_base_plain_static_0 42.13 37.27 37.15 median 37.27
+ep16_deepep_v1/00_base_plain_static_128 45.91 39.95 40.09 median 40.09
+ep16_deepep_v1/00_base_plain_static_32 42.62 37.33 37.09 median 37.33
+ep16_deepep_v1/00_base_plain_static_64 44.28 38.97 38.98 median 38.98
+ep16_deepep_v1/00_base_plain_trivial_0 42.31 37.65 37.50 median 37.65
+ep16_deepep_v1/00_static_metro_128 43.85 37.83 37.42 median 37.83
+ep16_deepep_v1/00_static_metro_32 42.85 38.49 37.73 median 38.49
+ep16_deepep_v1/00_static_metro_64 43.42 38.38 37.88 median 38.38

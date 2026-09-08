@@ -1,0 +1,797 @@
+{
+  "cells": [
+    {
+      "ep": 4,
+      "global_active_logical_mean": 158.68046875,
+      "global_batch": 32,
+      "layers": 5,
+      "num_physical": 320,
+      "perfect_balance_rank_load": 39.6701171875,
+      "placement_source": "eplb",
+      "policies": {
+        "metro_fixed_first": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 1.6586989380191097,
+          "rank_max_mean": 40.328125,
+          "rank_max_p90": 42,
+          "total_physical_active_mean": 158.68046875
+        },
+        "optimal": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 1.0363791227457009,
+          "rank_max_mean": 40.08125,
+          "rank_max_p90": 42,
+          "total_physical_active_mean": 158.68046875
+        },
+        "sglang_static": {
+          "duplicate_activations_mean": 8.080468750000023,
+          "excess_over_perfect_balance_pct": 16.360019890601695,
+          "rank_max_mean": 46.16015625,
+          "rank_max_p90": 49,
+          "total_physical_active_mean": 166.7609375
+        },
+        "static_global": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 11.663080778490587,
+          "rank_max_mean": 44.296875,
+          "rank_max_p90": 48,
+          "total_physical_active_mean": 158.68046875
+        }
+      },
+      "redundancy": 1.25,
+      "steps": 256,
+      "tokens_per_rank": 8.0
+    },
+    {
+      "ep": 4,
+      "global_active_logical_mean": 216.4453125,
+      "global_batch": 64,
+      "layers": 5,
+      "num_physical": 320,
+      "perfect_balance_rank_load": 54.111328125,
+      "placement_source": "eplb",
+      "policies": {
+        "metro_fixed_first": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 1.0359140949287138,
+          "rank_max_mean": 54.671875,
+          "rank_max_p90": 56,
+          "total_physical_active_mean": 216.4453125
+        },
+        "optimal": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 0.6894062443602245,
+          "rank_max_mean": 54.484375,
+          "rank_max_p90": 56,
+          "total_physical_active_mean": 216.4453125
+        },
+        "sglang_static": {
+          "duplicate_activations_mean": 19.25,
+          "excess_over_perfect_balance_pct": 16.181194730193106,
+          "rank_max_mean": 62.8671875,
+          "rank_max_p90": 66,
+          "total_physical_active_mean": 235.6953125
+        },
+        "static_global": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 8.046922938097811,
+          "rank_max_mean": 58.465625,
+          "rank_max_p90": 62,
+          "total_physical_active_mean": 216.4453125
+        }
+      },
+      "redundancy": 1.25,
+      "steps": 128,
+      "tokens_per_rank": 16.0
+    },
+    {
+      "ep": 4,
+      "global_active_logical_mean": 158.68046875,
+      "global_batch": 32,
+      "layers": 5,
+      "num_physical": 384,
+      "perfect_balance_rank_load": 39.6701171875,
+      "placement_source": "eplb",
+      "policies": {
+        "metro_fixed_first": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 1.6547602050110743,
+          "rank_max_mean": 40.3265625,
+          "rank_max_p90": 42,
+          "total_physical_active_mean": 158.68046875
+        },
+        "optimal": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 0.9182171325039068,
+          "rank_max_mean": 40.034375,
+          "rank_max_p90": 42,
+          "total_physical_active_mean": 158.68046875
+        },
+        "sglang_static": {
+          "duplicate_activations_mean": 15.198437500000011,
+          "excess_over_perfect_balance_pct": 22.041642254727712,
+          "rank_max_mean": 48.4140625,
+          "rank_max_p90": 52,
+          "total_physical_active_mean": 173.87890625
+        },
+        "static_global": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 13.746670539754135,
+          "rank_max_mean": 45.1234375,
+          "rank_max_p90": 49,
+          "total_physical_active_mean": 158.68046875
+        }
+      },
+      "redundancy": 1.5,
+      "steps": 256,
+      "tokens_per_rank": 8.0
+    },
+    {
+      "ep": 4,
+      "global_active_logical_mean": 216.4453125,
+      "global_batch": 64,
+      "layers": 5,
+      "num_physical": 384,
+      "perfect_balance_rank_load": 54.111328125,
+      "placement_source": "eplb",
+      "policies": {
+        "metro_fixed_first": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 1.2178307164771862,
+          "rank_max_mean": 54.7703125,
+          "rank_max_p90": 56,
+          "total_physical_active_mean": 216.4453125
+        },
+        "optimal": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 0.6894062443602245,
+          "rank_max_mean": 54.484375,
+          "rank_max_p90": 56,
+          "total_physical_active_mean": 216.4453125
+        },
+        "sglang_static": {
+          "duplicate_activations_mean": 37.57499999999999,
+          "excess_over_perfect_balance_pct": 26.09998195271612,
+          "rank_max_mean": 68.234375,
+          "rank_max_p90": 72,
+          "total_physical_active_mean": 254.0203125
+        },
+        "static_global": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 10.807435480960127,
+          "rank_max_mean": 59.959375,
+          "rank_max_p90": 65,
+          "total_physical_active_mean": 216.4453125
+        }
+      },
+      "redundancy": 1.5,
+      "steps": 128,
+      "tokens_per_rank": 16.0
+    },
+    {
+      "ep": 4,
+      "global_active_logical_mean": 158.68046875,
+      "global_batch": 32,
+      "layers": 5,
+      "num_physical": 512,
+      "perfect_balance_rank_load": 39.6701171875,
+      "placement_source": "eplb",
+      "policies": {
+        "metro_fixed_first": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 1.5523531468015106,
+          "rank_max_mean": 40.2859375,
+          "rank_max_p90": 42,
+          "total_physical_active_mean": 158.68046875
+        },
+        "optimal": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 0.9182171325039068,
+          "rank_max_mean": 40.034375,
+          "rank_max_p90": 42,
+          "total_physical_active_mean": 158.68046875
+        },
+        "sglang_static": {
+          "duplicate_activations_mean": 27.60859375000001,
+          "excess_over_perfect_balance_pct": 31.872719842844567,
+          "rank_max_mean": 52.3140625,
+          "rank_max_p90": 56,
+          "total_physical_active_mean": 186.2890625
+        },
+        "static_global": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 16.933105543274387,
+          "rank_max_mean": 46.3875,
+          "rank_max_p90": 51,
+          "total_physical_active_mean": 158.68046875
+        }
+      },
+      "redundancy": 2.0,
+      "steps": 256,
+      "tokens_per_rank": 8.0
+    },
+    {
+      "ep": 4,
+      "global_active_logical_mean": 216.4453125,
+      "global_batch": 64,
+      "layers": 5,
+      "num_physical": 512,
+      "perfect_balance_rank_load": 54.111328125,
+      "placement_source": "eplb",
+      "policies": {
+        "metro_fixed_first": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 1.0792275762497638,
+          "rank_max_mean": 54.6953125,
+          "rank_max_p90": 56,
+          "total_physical_active_mean": 216.4453125
+        },
+        "optimal": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 0.6894062443602245,
+          "rank_max_mean": 54.484375,
+          "rank_max_p90": 56,
+          "total_physical_active_mean": 216.4453125
+        },
+        "sglang_static": {
+          "duplicate_activations_mean": 68.86562500000002,
+          "excess_over_perfect_balance_pct": 42.06244360223788,
+          "rank_max_mean": 76.871875,
+          "rank_max_p90": 81,
+          "total_physical_active_mean": 285.3109375
+        },
+        "static_global": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 14.367803645551348,
+          "rank_max_mean": 61.8859375,
+          "rank_max_p90": 66,
+          "total_physical_active_mean": 216.4453125
+        }
+      },
+      "redundancy": 2.0,
+      "steps": 128,
+      "tokens_per_rank": 16.0
+    },
+    {
+      "ep": 8,
+      "global_active_logical_mean": 158.68046875,
+      "global_batch": 32,
+      "layers": 5,
+      "num_physical": 320,
+      "perfect_balance_rank_load": 19.83505859375,
+      "placement_source": "eplb",
+      "policies": {
+        "metro_fixed_first": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 5.944040450788002,
+          "rank_max_mean": 21.0140625,
+          "rank_max_p90": 22,
+          "total_physical_active_mean": 158.68046875
+        },
+        "optimal": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 4.7033395532492195,
+          "rank_max_mean": 20.76796875,
+          "rank_max_p90": 22,
+          "total_physical_active_mean": 158.68046875
+        },
+        "sglang_static": {
+          "duplicate_activations_mean": 5.302343750000006,
+          "excess_over_perfect_balance_pct": 25.90160060262616,
+          "rank_max_mean": 24.97265625,
+          "rank_max_p90": 27,
+          "total_physical_active_mean": 163.9828125
+        },
+        "static_global": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 22.750614196178454,
+          "rank_max_mean": 24.34765625,
+          "rank_max_p90": 27,
+          "total_physical_active_mean": 158.68046875
+        }
+      },
+      "redundancy": 1.25,
+      "steps": 256,
+      "tokens_per_rank": 4.0
+    },
+    {
+      "ep": 8,
+      "global_active_logical_mean": 216.4453125,
+      "global_batch": 64,
+      "layers": 5,
+      "num_physical": 320,
+      "perfect_balance_rank_load": 27.0556640625,
+      "placement_source": "eplb",
+      "policies": {
+        "metro_fixed_first": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 2.9821331889550606,
+          "rank_max_mean": 27.8625,
+          "rank_max_p90": 29,
+          "total_physical_active_mean": 216.4453125
+        },
+        "optimal": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 1.896408590507126,
+          "rank_max_mean": 27.56875,
+          "rank_max_p90": 28,
+          "total_physical_active_mean": 216.4453125
+        },
+        "sglang_static": {
+          "duplicate_activations_mean": 12.953125,
+          "excess_over_perfect_balance_pct": 20.365277025807615,
+          "rank_max_mean": 32.565625,
+          "rank_max_p90": 35,
+          "total_physical_active_mean": 229.3984375
+        },
+        "static_global": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 15.005955603681652,
+          "rank_max_mean": 31.115625,
+          "rank_max_p90": 33,
+          "total_physical_active_mean": 216.4453125
+        }
+      },
+      "redundancy": 1.25,
+      "steps": 128,
+      "tokens_per_rank": 8.0
+    },
+    {
+      "ep": 8,
+      "global_active_logical_mean": 158.68046875,
+      "global_batch": 32,
+      "layers": 5,
+      "num_physical": 384,
+      "perfect_balance_rank_load": 19.83505859375,
+      "placement_source": "eplb",
+      "policies": {
+        "metro_fixed_first": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 4.317343718459377,
+          "rank_max_mean": 20.69140625,
+          "rank_max_p90": 22,
+          "total_physical_active_mean": 158.68046875
+        },
+        "optimal": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 2.237692690203885,
+          "rank_max_mean": 20.27890625,
+          "rank_max_p90": 21,
+          "total_physical_active_mean": 158.68046875
+        },
+        "sglang_static": {
+          "duplicate_activations_mean": 9.896093750000006,
+          "excess_over_perfect_balance_pct": 30.462653425959218,
+          "rank_max_mean": 25.87734375,
+          "rank_max_p90": 28,
+          "total_physical_active_mean": 168.5765625
+        },
+        "static_global": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 24.39306586053931,
+          "rank_max_mean": 24.6734375,
+          "rank_max_p90": 27,
+          "total_physical_active_mean": 158.68046875
+        }
+      },
+      "redundancy": 1.5,
+      "steps": 256,
+      "tokens_per_rank": 4.0
+    },
+    {
+      "ep": 8,
+      "global_active_logical_mean": 216.4453125,
+      "global_batch": 64,
+      "layers": 5,
+      "num_physical": 384,
+      "perfect_balance_rank_load": 27.0556640625,
+      "placement_source": "eplb",
+      "policies": {
+        "metro_fixed_first": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 2.7857787402995715,
+          "rank_max_mean": 27.809375,
+          "rank_max_p90": 29,
+          "total_physical_active_mean": 216.4453125
+        },
+        "optimal": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 1.5845515249954811,
+          "rank_max_mean": 27.484375,
+          "rank_max_p90": 28,
+          "total_physical_active_mean": 216.4453125
+        },
+        "sglang_static": {
+          "duplicate_activations_mean": 24.6640625,
+          "excess_over_perfect_balance_pct": 28.173253925284246,
+          "rank_max_mean": 34.678125,
+          "rank_max_p90": 37,
+          "total_physical_active_mean": 241.109375
+        },
+        "static_global": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 17.639415268002168,
+          "rank_max_mean": 31.828125,
+          "rank_max_p90": 34,
+          "total_physical_active_mean": 216.4453125
+        }
+      },
+      "redundancy": 1.5,
+      "steps": 128,
+      "tokens_per_rank": 8.0
+    },
+    {
+      "ep": 8,
+      "global_active_logical_mean": 158.68046875,
+      "global_batch": 32,
+      "layers": 5,
+      "num_physical": 512,
+      "perfect_balance_rank_load": 19.83505859375,
+      "placement_source": "eplb",
+      "policies": {
+        "metro_fixed_first": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 4.285833854394894,
+          "rank_max_mean": 20.68515625,
+          "rank_max_p90": 22,
+          "total_physical_active_mean": 158.68046875
+        },
+        "optimal": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 2.2258764911797124,
+          "rank_max_mean": 20.2765625,
+          "rank_max_p90": 21,
+          "total_physical_active_mean": 158.68046875
+        },
+        "sglang_static": {
+          "duplicate_activations_mean": 18.42109375000001,
+          "excess_over_perfect_balance_pct": 41.605329105759914,
+          "rank_max_mean": 28.0875,
+          "rank_max_p90": 31,
+          "total_physical_active_mean": 177.1015625
+        },
+        "static_global": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 31.723047988538312,
+          "rank_max_mean": 26.12734375,
+          "rank_max_p90": 29,
+          "total_physical_active_mean": 158.68046875
+        }
+      },
+      "redundancy": 2.0,
+      "steps": 256,
+      "tokens_per_rank": 4.0
+    },
+    {
+      "ep": 8,
+      "global_active_logical_mean": 216.4453125,
+      "global_batch": 64,
+      "layers": 5,
+      "num_physical": 512,
+      "perfect_balance_rank_load": 27.0556640625,
+      "placement_source": "eplb",
+      "policies": {
+        "metro_fixed_first": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 3.1727125067677386,
+          "rank_max_mean": 27.9140625,
+          "rank_max_p90": 29,
+          "total_physical_active_mean": 216.4453125
+        },
+        "optimal": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 1.5845515249954811,
+          "rank_max_mean": 27.484375,
+          "rank_max_p90": 28,
+          "total_physical_active_mean": 216.4453125
+        },
+        "sglang_static": {
+          "duplicate_activations_mean": 46.203125,
+          "excess_over_perfect_balance_pct": 44.99621007038439,
+          "rank_max_mean": 39.2296875,
+          "rank_max_p90": 42,
+          "total_physical_active_mean": 262.6484375
+        },
+        "static_global": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 25.984479335859945,
+          "rank_max_mean": 34.0859375,
+          "rank_max_p90": 37,
+          "total_physical_active_mean": 216.4453125
+        }
+      },
+      "redundancy": 2.0,
+      "steps": 128,
+      "tokens_per_rank": 8.0
+    },
+    {
+      "ep": 16,
+      "global_active_logical_mean": 158.68046875,
+      "global_batch": 32,
+      "layers": 5,
+      "num_physical": 320,
+      "perfect_balance_rank_load": 9.917529296875,
+      "placement_source": "eplb",
+      "policies": {
+        "metro_fixed_first": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 20.39131312435074,
+          "rank_max_mean": 11.93984375,
+          "rank_max_p90": 13,
+          "total_physical_active_mean": 158.68046875
+        },
+        "optimal": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 18.89459458128806,
+          "rank_max_mean": 11.79140625,
+          "rank_max_p90": 13,
+          "total_physical_active_mean": 158.68046875
+        },
+        "sglang_static": {
+          "duplicate_activations_mean": 3.1242187500000114,
+          "excess_over_perfect_balance_pct": 41.589574173727684,
+          "rank_max_mean": 14.0421875,
+          "rank_max_p90": 15,
+          "total_physical_active_mean": 161.8046875
+        },
+        "static_global": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 39.97469364042323,
+          "rank_max_mean": 13.88203125,
+          "rank_max_p90": 15,
+          "total_physical_active_mean": 158.68046875
+        }
+      },
+      "redundancy": 1.25,
+      "steps": 256,
+      "tokens_per_rank": 2.0
+    },
+    {
+      "ep": 16,
+      "global_active_logical_mean": 216.4453125,
+      "global_batch": 64,
+      "layers": 5,
+      "num_physical": 320,
+      "perfect_balance_rank_load": 13.52783203125,
+      "placement_source": "eplb",
+      "policies": {
+        "metro_fixed_first": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 11.55242735968236,
+          "rank_max_mean": 15.090625,
+          "rank_max_p90": 16,
+          "total_physical_active_mean": 216.4453125
+        },
+        "optimal": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 9.057570835589246,
+          "rank_max_mean": 14.753125,
+          "rank_max_p90": 16,
+          "total_physical_active_mean": 216.4453125
+        },
+        "sglang_static": {
+          "duplicate_activations_mean": 7.120312500000011,
+          "excess_over_perfect_balance_pct": 29.39758166395956,
+          "rank_max_mean": 17.5046875,
+          "rank_max_p90": 19,
+          "total_physical_active_mean": 223.565625
+        },
+        "static_global": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 26.833423569752735,
+          "rank_max_mean": 17.1578125,
+          "rank_max_p90": 18,
+          "total_physical_active_mean": 216.4453125
+        }
+      },
+      "redundancy": 1.25,
+      "steps": 128,
+      "tokens_per_rank": 4.0
+    },
+    {
+      "ep": 16,
+      "global_active_logical_mean": 158.68046875,
+      "global_batch": 32,
+      "layers": 5,
+      "num_physical": 384,
+      "perfect_balance_rank_load": 9.917529296875,
+      "placement_source": "eplb",
+      "policies": {
+        "metro_fixed_first": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 12.056954079296546,
+          "rank_max_mean": 11.11328125,
+          "rank_max_p90": 12,
+          "total_physical_active_mean": 158.68046875
+        },
+        "optimal": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 6.117344703142624,
+          "rank_max_mean": 10.52421875,
+          "rank_max_p90": 11,
+          "total_physical_active_mean": 158.68046875
+        },
+        "sglang_static": {
+          "duplicate_activations_mean": 5.537500000000023,
+          "excess_over_perfect_balance_pct": 46.44997070567325,
+          "rank_max_mean": 14.52421875,
+          "rank_max_p90": 16,
+          "total_physical_active_mean": 164.21796875
+        },
+        "static_global": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 43.31473923125779,
+          "rank_max_mean": 14.21328125,
+          "rank_max_p90": 16,
+          "total_physical_active_mean": 158.68046875
+        }
+      },
+      "redundancy": 1.5,
+      "steps": 256,
+      "tokens_per_rank": 2.0
+    },
+    {
+      "ep": 16,
+      "global_active_logical_mean": 216.4453125,
+      "global_batch": 64,
+      "layers": 5,
+      "num_physical": 384,
+      "perfect_balance_rank_load": 13.52783203125,
+      "placement_source": "eplb",
+      "policies": {
+        "metro_fixed_first": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 8.641761414907068,
+          "rank_max_mean": 14.696875,
+          "rank_max_p90": 15,
+          "total_physical_active_mean": 216.4453125
+        },
+        "optimal": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 3.6058473199783503,
+          "rank_max_mean": 14.015625,
+          "rank_max_p90": 14,
+          "total_physical_active_mean": 216.4453125
+        },
+        "sglang_static": {
+          "duplicate_activations_mean": 14.126562500000006,
+          "excess_over_perfect_balance_pct": 37.344161703663595,
+          "rank_max_mean": 18.5796875,
+          "rank_max_p90": 20,
+          "total_physical_active_mean": 230.571875
+        },
+        "static_global": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 31.22252301028694,
+          "rank_max_mean": 17.7515625,
+          "rank_max_p90": 19,
+          "total_physical_active_mean": 216.4453125
+        }
+      },
+      "redundancy": 1.5,
+      "steps": 128,
+      "tokens_per_rank": 4.0
+    },
+    {
+      "ep": 16,
+      "global_active_logical_mean": 158.68046875,
+      "global_batch": 32,
+      "layers": 5,
+      "num_physical": 512,
+      "perfect_balance_rank_load": 9.917529296875,
+      "placement_source": "eplb",
+      "policies": {
+        "metro_fixed_first": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 11.347982137845825,
+          "rank_max_mean": 11.04296875,
+          "rank_max_p90": 12,
+          "total_physical_active_mean": 158.68046875
+        },
+        "optimal": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 4.730910684305623,
+          "rank_max_mean": 10.38671875,
+          "rank_max_p90": 11,
+          "total_physical_active_mean": 158.68046875
+        },
+        "sglang_static": {
+          "duplicate_activations_mean": 10.700781250000006,
+          "excess_over_perfect_balance_pct": 59.636848816656915,
+          "rank_max_mean": 15.83203125,
+          "rank_max_p90": 18,
+          "total_physical_active_mean": 169.38125
+        },
+        "static_global": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 55.249100245678484,
+          "rank_max_mean": 15.396875,
+          "rank_max_p90": 18,
+          "total_physical_active_mean": 158.68046875
+        }
+      },
+      "redundancy": 2.0,
+      "steps": 256,
+      "tokens_per_rank": 2.0
+    },
+    {
+      "ep": 16,
+      "global_active_logical_mean": 216.4453125,
+      "global_batch": 64,
+      "layers": 5,
+      "num_physical": 512,
+      "perfect_balance_rank_load": 13.52783203125,
+      "placement_source": "eplb",
+      "policies": {
+        "metro_fixed_first": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 8.191301209168023,
+          "rank_max_mean": 14.6359375,
+          "rank_max_p90": 15,
+          "total_physical_active_mean": 216.4453125
+        },
+        "optimal": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 3.397942609637261,
+          "rank_max_mean": 13.9875,
+          "rank_max_p90": 14,
+          "total_physical_active_mean": 216.4453125
+        },
+        "sglang_static": {
+          "duplicate_activations_mean": 27.4609375,
+          "excess_over_perfect_balance_pct": 54.72730554051615,
+          "rank_max_mean": 20.93125,
+          "rank_max_p90": 23,
+          "total_physical_active_mean": 243.90625
+        },
+        "static_global": {
+          "duplicate_activations_mean": 0.0,
+          "excess_over_perfect_balance_pct": 46.13391084641763,
+          "rank_max_mean": 19.76875,
+          "rank_max_p90": 22,
+          "total_physical_active_mean": 216.4453125
+        }
+      },
+      "redundancy": 2.0,
+      "steps": 128,
+      "tokens_per_rank": 4.0
+    }
+  ],
+  "meta": {
+    "eplb": {
+      "algorithm": "auto",
+      "num_groups": 8,
+      "num_nodes": 1
+    },
+    "eplb_weights": "/lustre/raplab/client/xutingz/workspace/bench/waterfill/decode_unique_20260723/ep4_8l_logical_count.pt",
+    "fit_metric": "tokens",
+    "fit_positions": null,
+    "moe_layers": "3:8",
+    "note": "synthetic routing shows trends only; use --routing file with real TopK ids for model-specific numbers",
+    "placement": "eplb",
+    "placement_file": null,
+    "placement_sources_used": {
+      "ep16_phys320": "eplb",
+      "ep16_phys384": "eplb",
+      "ep16_phys512": "eplb",
+      "ep4_phys320": "eplb",
+      "ep4_phys384": "eplb",
+      "ep4_phys512": "eplb",
+      "ep8_phys320": "eplb",
+      "ep8_phys384": "eplb",
+      "ep8_phys512": "eplb"
+    },
+    "policies": [
+      "static_global",
+      "sglang_static",
+      "metro_fixed_first",
+      "optimal"
+    ],
+    "positions": "128:192",
+    "routes_npy": "/lustre/raplab/client/xutingz/workspace/bench/metro_workload_sweep_20260904/raw_routes/sharegpt/logical_routes.npy",
+    "routing": "npy",
+    "seed": 20260904,
+    "topk_file": null,
+    "zipf_alpha": null
+  }
+}

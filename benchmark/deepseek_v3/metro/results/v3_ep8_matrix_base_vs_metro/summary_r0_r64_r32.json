@@ -1,0 +1,261 @@
+{
+  "runs": [
+    {
+      "run": "00_base_plain_static_0",
+      "mode": "base:plain_static@0",
+      "samples": [
+        {
+          "duration_s": 45.503,
+          "tok_per_s": 720.13,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 45.471,
+          "tok_per_s": 720.63,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 45.644,
+          "tok_per_s": 717.9,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 45.503,
+      "median_tok_per_s": 720.13,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "01_base_plain_static_64",
+      "mode": "base:plain_static@64",
+      "samples": [
+        {
+          "duration_s": 49.397,
+          "tok_per_s": 663.35,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 49.097,
+          "tok_per_s": 667.42,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 48.413,
+          "tok_per_s": 676.84,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 49.097,
+      "median_tok_per_s": 667.42,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "02_static_metro_64",
+      "mode": "static:metro@64",
+      "samples": [
+        {
+          "duration_s": 43.174,
+          "tok_per_s": 758.97,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 43.002,
+          "tok_per_s": 762.01,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 43.464,
+          "tok_per_s": 753.91,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 43.174,
+      "median_tok_per_s": 758.97,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "03_base_plain_static_32",
+      "mode": "base:plain_static@32",
+      "samples": [
+        {
+          "duration_s": 47.029,
+          "tok_per_s": 696.76,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 46.966,
+          "tok_per_s": 697.7,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 46.92,
+          "tok_per_s": 698.38,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 46.966,
+      "median_tok_per_s": 697.7,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    },
+    {
+      "run": "04_static_metro_32",
+      "mode": "static:metro@32",
+      "samples": [
+        {
+          "duration_s": 43.326,
+          "tok_per_s": 756.3,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_0.log"
+        },
+        {
+          "duration_s": 43.988,
+          "tok_per_s": 744.93,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_1.log"
+        },
+        {
+          "duration_s": 43.602,
+          "tok_per_s": 751.52,
+          "successful": 32,
+          "generated": 32768,
+          "file": "bench_2.log"
+        }
+      ],
+      "median_duration_s": 43.602,
+      "median_tok_per_s": 751.52,
+      "all_ok": true,
+      "generated": [
+        32768
+      ]
+    }
+  ],
+  "summary": {
+    "base:plain_static@0": {
+      "containers": 1,
+      "samples": 3,
+      "median_duration_s": 45.503,
+      "mean_duration_s": 45.53933333333333,
+      "min_duration_s": 45.471,
+      "max_duration_s": 45.644,
+      "process_medians_s": [
+        45.503
+      ],
+      "median_tok_per_s": 720.13
+    },
+    "base:plain_static@64": {
+      "containers": 1,
+      "samples": 3,
+      "median_duration_s": 49.097,
+      "mean_duration_s": 48.968999999999994,
+      "min_duration_s": 48.413,
+      "max_duration_s": 49.397,
+      "process_medians_s": [
+        49.097
+      ],
+      "median_tok_per_s": 667.42
+    },
+    "static:metro@64": {
+      "containers": 1,
+      "samples": 3,
+      "median_duration_s": 43.174,
+      "mean_duration_s": 43.21333333333333,
+      "min_duration_s": 43.002,
+      "max_duration_s": 43.464,
+      "process_medians_s": [
+        43.174
+      ],
+      "median_tok_per_s": 758.97
+    },
+    "base:plain_static@32": {
+      "containers": 1,
+      "samples": 3,
+      "median_duration_s": 46.966,
+      "mean_duration_s": 46.97166666666667,
+      "min_duration_s": 46.92,
+      "max_duration_s": 47.029,
+      "process_medians_s": [
+        46.966
+      ],
+      "median_tok_per_s": 697.7
+    },
+    "static:metro@32": {
+      "containers": 1,
+      "samples": 3,
+      "median_duration_s": 43.602,
+      "mean_duration_s": 43.638666666666666,
+      "min_duration_s": 43.326,
+      "max_duration_s": 43.988,
+      "process_medians_s": [
+        43.602
+      ],
+      "median_tok_per_s": 751.52
+    }
+  },
+  "comparisons": {
+    "base:plain_static@64": {
+      "latency_delta_pct": 7.8983803265718855,
+      "throughput_delta_pct": -7.3195117548220505,
+      "adjacent_pair_latency_deltas_pct": [
+        7.8983803265718855
+      ]
+    },
+    "static:metro@64": {
+      "latency_delta_pct": -5.118343845460737,
+      "throughput_delta_pct": 5.393470623359686,
+      "adjacent_pair_latency_deltas_pct": [
+        -5.118343845460737
+      ]
+    },
+    "base:plain_static@32": {
+      "latency_delta_pct": 3.2151726259807,
+      "throughput_delta_pct": -3.1147153986085807,
+      "adjacent_pair_latency_deltas_pct": [
+        3.2151726259807
+      ]
+    },
+    "static:metro@32": {
+      "latency_delta_pct": -4.177746522207338,
+      "throughput_delta_pct": 4.358935192256941,
+      "adjacent_pair_latency_deltas_pct": [
+        -4.177746522207338
+      ]
+    }
+  }
+}

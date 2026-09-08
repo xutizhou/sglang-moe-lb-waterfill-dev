@@ -1,0 +1,173 @@
+{
+ "00_base_plain_static_128": {
+  "ranks": {
+   "0": {
+    "routed_gemm": 17.582668962962966,
+    "metro_assign": 0.0,
+    "metro_allreduce": 0.066718,
+    "metro_count": 0.002415333333333333,
+    "deepep": 0.0,
+    "nccl_other": 10.354972222222223,
+    "attention": 2.3476542222222214,
+    "moe_aux": 0.5042359629629629,
+    "other_gemm": 8.84944337037037,
+    "other": 2.751246814814818,
+    "all": 42.45935488888882,
+    "step_span_ms": 42.46096748408564,
+    "steps": 27
+   },
+   "1": {
+    "routed_gemm": 17.80381188888889,
+    "metro_assign": 0.0,
+    "metro_allreduce": 0.06656951851851853,
+    "metro_count": 0.0015312592592592593,
+    "deepep": 0.0,
+    "nccl_other": 10.78498525925926,
+    "attention": 2.3104973333333327,
+    "moe_aux": 0.5079932222222221,
+    "other_gemm": 8.907043370370367,
+    "other": 2.019521037037033,
+    "all": 42.40195288888883,
+    "step_span_ms": 42.46092791521991,
+    "steps": 27
+   },
+   "2": {
+    "routed_gemm": 17.88528396296296,
+    "metro_assign": 0.0,
+    "metro_allreduce": 0.0679811111111111,
+    "metro_count": 0.001585851851851852,
+    "deepep": 0.0,
+    "nccl_other": 10.76152722222222,
+    "attention": 2.3622075185185176,
+    "moe_aux": 0.5095335555555555,
+    "other_gemm": 8.917500703703704,
+    "other": 2.0220283703703665,
+    "all": 42.52764829629624,
+    "step_span_ms": 42.46098224103009,
+    "steps": 27
+   },
+   "3": {
+    "routed_gemm": 17.642948444444446,
+    "metro_assign": 0.0,
+    "metro_allreduce": 0.06609185185185186,
+    "metro_count": 0.0015728518518518518,
+    "deepep": 0.0,
+    "nccl_other": 11.367303148148148,
+    "attention": 2.38816274074074,
+    "moe_aux": 0.5183413333333333,
+    "other_gemm": 8.896746037037037,
+    "other": 2.079775925925923,
+    "all": 42.96094233333327,
+    "step_span_ms": 42.460950520833336,
+    "steps": 27
+   },
+   "4": {
+    "routed_gemm": 17.422364592592594,
+    "metro_assign": 0.0,
+    "metro_allreduce": 0.0694271111111111,
+    "metro_count": 0.0015822222222222223,
+    "deepep": 0.0,
+    "nccl_other": 11.506411185185184,
+    "attention": 2.420094962962962,
+    "moe_aux": 0.5192662222222223,
+    "other_gemm": 8.909145444444444,
+    "other": 2.0522927037037,
+    "all": 42.90058444444443,
+    "step_span_ms": 42.46097815393518,
+    "steps": 27
+   },
+   "5": {
+    "routed_gemm": 17.525497592592593,
+    "metro_assign": 0.0,
+    "metro_allreduce": 0.0654435925925926,
+    "metro_count": 0.0015206296296296298,
+    "deepep": 0.0,
+    "nccl_other": 11.330997407407407,
+    "attention": 2.3590172222222208,
+    "moe_aux": 0.5116949999999999,
+    "other_gemm": 8.869858296296295,
+    "other": 2.033471518518515,
+    "all": 42.69750125925919,
+    "step_span_ms": 42.46097583912037,
+    "steps": 27
+   },
+   "6": {
+    "routed_gemm": 17.62989177777778,
+    "metro_assign": 0.0,
+    "metro_allreduce": 0.06594492592592593,
+    "metro_count": 0.001464962962962963,
+    "deepep": 0.0,
+    "nccl_other": 11.390914444444444,
+    "attention": 2.395568925925925,
+    "moe_aux": 0.5164054814814814,
+    "other_gemm": 8.882080925925926,
+    "other": 2.069437666666664,
+    "all": 42.95170911111109,
+    "step_span_ms": 42.460967918113425,
+    "steps": 27
+   },
+   "7": {
+    "routed_gemm": 17.526845518518524,
+    "metro_assign": 0.0,
+    "metro_allreduce": 0.06734340740740741,
+    "metro_count": 0.001541851851851852,
+    "deepep": 0.0,
+    "nccl_other": 11.513809148148148,
+    "attention": 2.4058075925925917,
+    "moe_aux": 0.5197404074074073,
+    "other_gemm": 8.870607333333334,
+    "other": 2.0419252222222184,
+    "all": 42.94762048148144,
+    "step_span_ms": 42.46098260271991,
+    "steps": 27
+   }
+  },
+  "summary": {
+   "routed_gemm": {
+    "rank_max_ms": 17.88528396296296,
+    "rank_mean_ms": 17.627414092592595
+   },
+   "metro_assign": {
+    "rank_max_ms": 0.0,
+    "rank_mean_ms": 0.0
+   },
+   "metro_allreduce": {
+    "rank_max_ms": 0.0694271111111111,
+    "rank_mean_ms": 0.06693993981481482
+   },
+   "metro_count": {
+    "rank_max_ms": 0.002415333333333333,
+    "rank_mean_ms": 0.0016518703703703704
+   },
+   "deepep": {
+    "rank_max_ms": 0.0,
+    "rank_mean_ms": 0.0
+   },
+   "nccl_other": {
+    "rank_max_ms": 11.513809148148148,
+    "rank_mean_ms": 11.12636500462963
+   },
+   "attention": {
+    "rank_max_ms": 2.420094962962962,
+    "rank_mean_ms": 2.373626314814814
+   },
+   "moe_aux": {
+    "rank_max_ms": 0.5197404074074073,
+    "rank_mean_ms": 0.5134013981481481
+   },
+   "other_gemm": {
+    "rank_max_ms": 8.917500703703704,
+    "rank_mean_ms": 8.887803185185184
+   },
+   "other": {
+    "rank_max_ms": 2.751246814814818,
+    "rank_mean_ms": 2.1337124074074048
+   },
+   "all": {
+    "rank_max_ms": 42.96094233333327,
+    "rank_mean_ms": 42.730914212962915
+   },
+   "step_span_ms": 42.460966584382234
+  }
+ }
+}
