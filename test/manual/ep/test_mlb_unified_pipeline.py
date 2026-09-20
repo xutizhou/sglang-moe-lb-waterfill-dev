@@ -8,6 +8,7 @@ while replacing only the SGLang process-global accessors with small fixtures.
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 import torch
 import torch.distributed as dist
@@ -120,9 +121,10 @@ def main():
     recorder = _Recorder()
     metadata = _Metadata(device, rank)
     ep_group = _EPGroup()
-    glue.get_moe_ep_group = lambda: ep_group
-    glue.get_global_expert_location_metadata = lambda: metadata
-    glue.get_global_expert_distribution_recorder = lambda: recorder
+    glue.get_parallel = lambda: SimpleNamespace(moe_ep_group=ep_group)
+    glue.get_resources = lambda: SimpleNamespace(
+        expert_location_metadata=metadata, expert_distribution_recorder=recorder
+    )
 
     _run_l1_eplb(MoELoadBalancer(), device)
     placement = to_placement_snapshot(metadata, 0)

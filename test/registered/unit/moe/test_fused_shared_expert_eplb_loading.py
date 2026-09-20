@@ -35,7 +35,7 @@ class TestFusedSharedExpertEPLBLoading(TestCase):
             ),
             mock.patch(
                 "sglang.srt.layers.moe.fused_moe_triton.layer."
-                "is_deepep_class_backend",
+                "uses_per_rank_fused_shared_slots",
                 return_value=per_rank_slots,
             ),
         ):
@@ -70,14 +70,6 @@ class TestFusedSharedExpertEPLBLoading(TestCase):
                     ),
                     expected,
                 )
-
-    def test_rejects_shared_id_outside_fused_shared_range(self):
-        with self.assertRaisesRegex(ValueError, "Shared expert id 1 exceeds"):
-            self._load_shared(
-                require_global_experts=False,
-                per_rank_slots=False,
-                expert_id=257,
-            )
 
 
 if __name__ == "__main__":

@@ -9,8 +9,7 @@ from sglang.srt.eplb import expert_distribution
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 
-
-register_cpu_ci(est_time=1, suite="stage-a-test-cpu")
+register_cpu_ci(est_time=1, suite="base-a-test-cpu")
 
 
 class TestDeepEPAutoSinglePassGatherer(CustomTestCase):
@@ -26,9 +25,7 @@ class TestDeepEPAutoSinglePassGatherer(CustomTestCase):
             )
 
     def test_extend_uses_select_experts_and_ignores_low_latency_hook(self):
-        self.gatherer.on_forward_pass_start(
-            SimpleNamespace(is_extend_in_batch=True)
-        )
+        self.gatherer.on_forward_pass_start(SimpleNamespace(is_extend_in_batch=True))
         self.gatherer.on_select_experts(
             layer_idx=0, topk_ids=torch.tensor([[0, 1], [1, -1]])
         )
@@ -40,12 +37,8 @@ class TestDeepEPAutoSinglePassGatherer(CustomTestCase):
         self.assertTrue(torch.equal(result[0], torch.tensor([1, 2, 0, 0, 0, 0, 0, 0])))
 
     def test_decode_uses_rank_local_dispatch_counts_and_ignores_select_hook(self):
-        self.gatherer.on_forward_pass_start(
-            SimpleNamespace(is_extend_in_batch=False)
-        )
-        self.gatherer.on_select_experts(
-            layer_idx=1, topk_ids=torch.tensor([[6, 7]])
-        )
+        self.gatherer.on_forward_pass_start(SimpleNamespace(is_extend_in_batch=False))
+        self.gatherer.on_select_experts(layer_idx=1, topk_ids=torch.tensor([[6, 7]]))
         self.gatherer.on_deepep_dispatch_low_latency(
             layer_idx=1, local_physical_count_of_layer=torch.tensor([3, 4])
         )
@@ -54,9 +47,7 @@ class TestDeepEPAutoSinglePassGatherer(CustomTestCase):
         self.assertTrue(torch.equal(result[1], torch.tensor([0, 0, 3, 4, 0, 0, 0, 0])))
 
     def test_decode_excludes_appended_fused_shared_expert_count(self):
-        self.gatherer.on_forward_pass_start(
-            SimpleNamespace(is_extend_in_batch=False)
-        )
+        self.gatherer.on_forward_pass_start(SimpleNamespace(is_extend_in_batch=False))
         self.gatherer.on_deepep_dispatch_low_latency(
             layer_idx=0,
             local_physical_count_of_layer=torch.tensor([3, 4, 99]),

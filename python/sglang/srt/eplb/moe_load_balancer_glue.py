@@ -5,15 +5,8 @@ from __future__ import annotations
 from typing import Optional
 
 import torch
-from moe_load_balancer.adapters.sglang import (
-    to_placement_snapshot,
-    to_routing_request,
-    to_sglang_routing_output,
-)
 
-from sglang.srt.distributed import get_moe_ep_group
-from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
-from sglang.srt.eplb.expert_location import get_global_expert_location_metadata
+from sglang.srt.runtime_context import get_parallel, get_resources
 
 _FORWARD_MODE_TO_STAGE = {
     "EXTEND": "prefill",
@@ -30,14 +23,14 @@ class SGLangRoutingCollectives:
 
     @property
     def rank(self) -> int:
-        return get_moe_ep_group().rank_in_group
+        return get_parallel().moe_ep_group.rank_in_group
 
     @property
     def world_size(self) -> int:
-        return get_moe_ep_group().world_size
+        return get_parallel().moe_ep_group.world_size
 
     def all_reduce_sum(self, payload: torch.Tensor) -> torch.Tensor:
-        return get_moe_ep_group().all_reduce(payload)
+        return get_parallel().moe_ep_group.all_reduce(payload)
 
 
 def route_topk_with_mlb(
@@ -52,9 +45,15 @@ def route_topk_with_mlb(
 ):
     """Run the configured L2 pipeline and materialize SGLang TopK output."""
 
+    from moe_load_balancer.adapters.sglang import (
+        to_placement_snapshot,
+        to_routing_request,
+        to_sglang_routing_output,
+    )
+
     from sglang.srt.layers.moe.topk import StandardTopKOutput
 
-    metadata = get_global_expert_location_metadata()
+    metadata = get_resources().expert_location_metadata
     if metadata is None:
         raise RuntimeError("MLB L2 routing requires committed expert metadata.")
 
@@ -80,7 +79,7 @@ def route_topk_with_mlb(
         routed_scaling_factor=routed_scaling_factor,
     )
 
-    get_global_expert_distribution_recorder().on_select_experts(
+    get_resources().expert_distribution_recorder.on_select_experts(
         topk_ids=output.recorded_physical_topk_ids
     )
     from sglang.srt.state_capturer.routed_experts import get_global_experts_capturer
@@ -105,3 +104,11 @@ def _stage_from_forward_batch(forward_batch) -> Optional[str]:
         return None
     name = getattr(forward_mode, "name", None) or str(forward_mode).upper()
     return _FORWARD_MODE_TO_STAGE.get(name)
+
+
+def get_moe_load_balancer_pipeline(algorithm):
+    if algorithm is None:
+        return None
+    from moe_load_balancer import RoutingPipeline
+
+    return RoutingPipeline.from_value(algorithm)
