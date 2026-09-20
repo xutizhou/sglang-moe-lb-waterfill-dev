@@ -37,14 +37,12 @@ class EPLBManager:
         get_expert_backup_client: Callable[[], Any],
         get_weight_updater: Callable[[], Any],
         moe_load_balancer=None,
-        on_placement_committed=None,
     ):
         super().__init__()
         # These collaborators are set on ModelRunner AFTER EPLBManager is
         # constructed (model load, expert_backup_client, weight_updater), so
         # they are read through getters at rebalance time, not captured here.
         self._moe_load_balancer = moe_load_balancer
-        self._on_placement_committed = on_placement_committed
         self._model_config = model_config
         self._ps = ps
         self._get_model = get_model
@@ -159,7 +157,11 @@ class EPLBManager:
             if len(update_layer_ids_chunks) > 1:
                 yield
             update_expert_location_with_recovery(
-                on_placement_committed=self._on_placement_committed,
+                on_placement_committed=(
+                    self._moe_load_balancer.commit_placement
+                    if self._moe_load_balancer is not None
+                    else None
+                ),
                 expert_location_updater=self._get_expert_location_updater(),
                 model=self._get_model(),
                 new_expert_location_metadata=expert_location_metadata,

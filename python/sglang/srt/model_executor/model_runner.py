@@ -711,28 +711,15 @@ class ModelRunner:
     def _create_moe_load_balancer(self):
         if self.is_draft_worker:
             return None
-        server_args = get_exec().moe
-        if server_args.moe_load_balancer_algorithm is None:
+        moe = get_exec().moe
+        if moe.moe_load_balancer_algorithm is None:
             return None
 
         from moe_load_balancer import MoELoadBalancer
 
-        from sglang.srt.eplb.moe_load_balancer_glue import SGLangRoutingCollectives
+        from sglang.srt.runtime_context import get_context
 
-        algorithm = server_args.moe_load_balancer_algorithm
-
-        common = ExpertLocationMetadata._init_common(
-            self.model_config,
-        )
-        if common is None:
-            raise ValueError("MLB routing requires MoE expert-location metadata.")
-        return MoELoadBalancer.from_algorithm(
-            algorithm,
-            ep_size=common["ep_size"],
-            source_rank=get_parallel().moe_ep_rank,
-            experts_per_rank=common["num_local_physical_experts"],
-            collectives=SGLangRoutingCollectives(),
-        )
+        return MoELoadBalancer.from_sglang_context(get_context())
 
     def _prepare_moe_topk(self):
         if (
@@ -740,47 +727,17 @@ class ModelRunner:
             or not self.moe_load_balancer.routing_capabilities.requires_post_topk_routing
         ):
             return
-
-        placement_metadata = get_global_expert_location_metadata()
-        if placement_metadata is None:
-            raise RuntimeError("MLB L2 requires committed expert metadata.")
-        from moe_load_balancer.adapters.sglang import to_placement_snapshot
-
-        num_prepared = 0
+        layer_ids = []
         for module in self.model.modules():
             if not isinstance(module, (TopK, HashTopK)):
                 continue
-            module.moe_load_balancer = self.moe_load_balancer
             if module.layer_id is None:
                 raise RuntimeError(
                     "MLB routing requires every MoE TopK to have layer_id."
                 )
-            self.moe_load_balancer.on_placement_committed(
-                to_placement_snapshot(placement_metadata, module.layer_id)
-            )
-            num_prepared += 1
-        if num_prepared:
-            logger.info(
-                "Attached one MoELoadBalancer to %d TopK modules.", num_prepared
-            )
-
-    def _notify_mlb_placement_committed(self, update_layer_ids: list[int]):
-        """Pass framework-committed placement metadata to active MLB policies."""
-
-        if (
-            self.moe_load_balancer is None
-            or not self.moe_load_balancer.routing_capabilities.requires_placement_state
-        ):
-            return
-
-        from moe_load_balancer.adapters.sglang import to_placement_snapshot
-
-        placement_metadata = get_global_expert_location_metadata()
-        if placement_metadata is None:
-            raise RuntimeError("MLB L2 requires committed expert metadata.")
-        for layer_id in update_layer_ids:
-            snapshot = to_placement_snapshot(placement_metadata, layer_id)
-            self.moe_load_balancer.on_placement_committed(snapshot)
+            module.moe_load_balancer = self.moe_load_balancer
+            layer_ids.append(module.layer_id)
+        self.moe_load_balancer.commit_placement(layer_ids)
 
     def maybe_init_expert_location_metadata(self):
         if self.is_draft_worker:
@@ -823,7 +780,6 @@ class ModelRunner:
                 get_expert_backup_client=lambda: self.expert_backup_client,
                 get_weight_updater=lambda: self.weight_updater,
                 moe_load_balancer=self.moe_load_balancer,
-                on_placement_committed=self._notify_mlb_placement_committed,
             )
             if get_exec().moe.enable_eplb and (not self.is_draft_worker)
             else None

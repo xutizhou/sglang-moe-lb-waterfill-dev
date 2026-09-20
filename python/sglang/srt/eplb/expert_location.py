@@ -216,26 +216,16 @@ class ExpertLocationMetadata:
                 )
             )
         else:
-            from moe_load_balancer.adapters.sglang import (
-                to_placement_request,
-                to_sglang_maps,
-            )
-
             from sglang.srt.elastic_ep.elastic_ep import ElasticEPStateManager
 
             elastic_state = ElasticEPStateManager.instance()
-            request = to_placement_request(
+            maps = moe_load_balancer.plan_placement_from_counts(
                 logical_count,
-                num_physical_experts=num_physical_experts,
-                num_local_physical_experts=common["num_local_physical_experts"],
-                num_groups=num_groups,
-                num_nodes=num_nodes,
-                algorithm=get_exec().moe.eplb_algorithm,
+                use_flat_topology=use_flat_topology,
                 active_ranks=elastic_state.active_ranks
                 if elastic_state is not None
                 else None,
             )
-            maps = to_sglang_maps(moe_load_balancer.plan_placement(request))
             physical_to_logical_map = maps.physical_to_logical_map
             logical_to_all_physical_map = maps.logical_to_all_physical_map
 
@@ -248,7 +238,12 @@ class ExpertLocationMetadata:
         )
 
     @staticmethod
-    def _init_common(model_config: ModelConfig):
+    def _init_common(model_config: ModelConfig, *, context=None):
+        from sglang.srt.runtime_context import get_context
+
+        context = get_context() if context is None else context
+        moe = context.config_bag("exec").moe
+        parallel = context.parallel
 
         model_config_for_expert_location = (
             ModelConfigForExpertLocation.from_model_config(model_config)
@@ -259,17 +254,17 @@ class ExpertLocationMetadata:
 
         base_num_physical_experts = (
             model_config_for_expert_location.num_logical_experts
-            + get_exec().moe.ep_num_redundant_experts
+            + moe.ep_num_redundant_experts
         )
         # elastic-EP scale-up rewrites ep_size on the published config
-        ep_size = get_parallel().ep_size
+        ep_size = parallel.ep_size
         num_physical_experts = base_num_physical_experts
-        initial_ep_size = get_parallel().elastic_ep_initial_size
+        initial_ep_size = parallel.elastic_ep_initial_size
         if initial_ep_size is not None:
-            if get_exec().moe.ep_join_mode == "scale":
+            if moe.ep_join_mode == "scale":
                 ep_size = max(
                     ep_size,
-                    get_parallel().ep_join_rank_offset + get_parallel().tp_size,
+                    parallel.ep_join_rank_offset + parallel.tp_size,
                 )
             num_physical_experts, num_local_physical_experts = (
                 _compute_elastic_expert_layout(

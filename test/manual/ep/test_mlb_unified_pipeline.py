@@ -1,22 +1,21 @@
 """Two-rank H20 smoke for the unified MLB EPLB/LPLB/Waterfill pipeline.
 
-Run one process per node with ``RANK``, ``WORLD_SIZE``, ``MASTER_ADDR`` and
+Run one process per GPU with ``RANK``, ``WORLD_SIZE``, ``MASTER_ADDR`` and
 ``MASTER_PORT`` set. This test uses real NCCL and real MLB Triton policies,
-while replacing only the SGLang process-global accessors with small fixtures.
+with a small bound-context fixture for SGLang-owned resources.
 """
 
 from __future__ import annotations
 
 import os
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
 import torch.distributed as dist
 from moe_load_balancer import MoELoadBalancer
-from moe_load_balancer.adapters.sglang import (
-    to_placement_request,
-    to_placement_snapshot,
-)
+from moe_load_balancer.adapters.sglang import to_placement_request
+from moe_load_balancer.adapters.sglang.runtime import _SGLangRuntime
 
 from sglang.srt.eplb import moe_load_balancer_glue as glue
 from sglang.srt.layers.moe.topk import StandardTopKOutput
@@ -109,6 +108,9 @@ def _run_l2_mode(mlb, metadata, recorder, rank, mode, device):
     assert output.topk_ids.shape == (num_tokens, expected_width)
     assert recorder.last_ids.shape == (num_tokens, 2)
     assert torch.all((recorder.last_ids >= 0) & (recorder.last_ids < 4))
+    assert torch.equal(
+        metadata.physical_to_logical_map[0, recorder.last_ids.long()], logical_ids
+    )
 
 
 def main():
@@ -121,13 +123,16 @@ def main():
     recorder = _Recorder()
     metadata = _Metadata(device, rank)
     ep_group = _EPGroup()
-    glue.get_parallel = lambda: SimpleNamespace(moe_ep_group=ep_group)
-    glue.get_resources = lambda: SimpleNamespace(
-        expert_location_metadata=metadata, expert_distribution_recorder=recorder
+    context = SimpleNamespace(
+        parallel=SimpleNamespace(moe_ep_rank=rank, moe_ep_group=ep_group),
+        resources=SimpleNamespace(
+            expert_location_metadata=metadata,
+            expert_distribution_recorder=recorder,
+            experts_capturer=None,
+        ),
     )
 
     _run_l1_eplb(MoELoadBalancer(), device)
-    placement = to_placement_snapshot(metadata, 0)
     modes = {
         "lplb": "lplb",
         "waterfill": "waterfill",
@@ -136,15 +141,34 @@ def main():
         "combined_idle": "lplb+waterfill",
     }
     for mode, algorithm in modes.items():
-        mlb = MoELoadBalancer.from_algorithm(
-            algorithm,
-            ep_size=2,
-            source_rank=rank,
-            experts_per_rank=2,
-            collectives=glue.SGLangRoutingCollectives(),
+        context.config_bag = lambda name: SimpleNamespace(
+            moe=SimpleNamespace(moe_load_balancer_algorithm=algorithm)
         )
-        mlb.on_placement_committed(placement)
+        with patch.object(
+            _SGLangRuntime,
+            "_expert_layout",
+            return_value={
+                "ep_size": 2,
+                "num_local_physical_experts": 2,
+            },
+        ):
+            mlb = MoELoadBalancer.from_sglang_context(context)
+        mlb.commit_placement([0])
         _run_l2_mode(mlb, metadata, recorder, rank, mode, device)
+        replacement = _Metadata(device, rank)
+        replacement.physical_to_logical_map = replacement.physical_to_logical_map.flip(
+            -1
+        )
+        replacement.logical_to_all_physical_map = (
+            replacement.logical_to_all_physical_map.flip(1)
+        )
+        replacement.logical_to_rank_dispatch_physical_map = (
+            replacement.logical_to_rank_dispatch_physical_map.flip(-1)
+        )
+        context.resources.expert_location_metadata = replacement
+        mlb.commit_placement([0])
+        _run_l2_mode(mlb, replacement, recorder, rank, mode, device)
+        context.resources.expert_location_metadata = metadata
         dist.barrier()
 
     if rank == 0:
