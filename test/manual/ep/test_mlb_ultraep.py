@@ -5,6 +5,7 @@ Requires MLB built with MLB_BUILD_ULTRAEP_PLACEMENT=1.
 """
 
 import os
+from types import SimpleNamespace
 
 import torch
 import torch.distributed as dist
@@ -160,12 +161,99 @@ def main():
                             torch.testing.assert_close(actual_counts, expected_counts)
                         cases += 1
                 dist.barrier()
+            cases += check_current_batch_refresh(mlb, live, weights, updater, rank)
         torch.cuda.synchronize()
         print(
             f'KBC_ACCURACY {{"pass": true, "cases": {cases}, "failed_samples": 0, "tolerance": "exact"}}',
             flush=True,
         )
     dist.destroy_process_group()
+
+
+def check_current_batch_refresh(mlb, live, weights, updater, rank):
+    from moe_load_balancer.core.refresh_gate import RefreshGate
+
+    from sglang.srt.eplb.eplb_manager import EPLBManager
+
+    manager = object.__new__(EPLBManager)
+    manager._moe_load_balancer = mlb
+    manager._refresh_gate = RefreshGate(1)
+    manager._rebalance_disabled_reason = None
+    manager._get_model = lambda: SimpleNamespace(
+        routed_experts_weights_of_layer=weights
+    )
+    manager._get_expert_location_updater = lambda: updater
+    manager._ps = SimpleNamespace(tp_rank=rank)
+    context = get_context()
+    cases = 0
+    with (
+        context.resources.override(
+            mlb_model_info={"num_logical_experts": 8, "num_groups": 1}
+        ),
+        context.parallel.override(
+            moe_ep_rank=rank,
+            moe_ep_group=SimpleNamespace(device_group=dist.group.WORLD),
+        ),
+    ):
+        for step, hot in enumerate((0, 7, 3)):
+            sizes = [4096, 0 if step == 1 else 2048]
+            manager._forward_batch = SimpleNamespace(
+                global_forward_mode=SimpleNamespace(
+                    is_decode=lambda: False, is_idle=lambda: False
+                ),
+                forward_mode=SimpleNamespace(is_decode=lambda: False),
+                is_extend_in_batch=True,
+                original_global_num_tokens_cpu=sizes,
+            )
+            for layer in (0, 1):
+                ids = torch.full(
+                    (sizes[rank], 2), hot, dtype=torch.int64, device="cuda"
+                )
+                ids[::3, 1] = -1
+                manager.refresh_layer(layer, ids, None)
+                snapshot = to_placement_snapshot(live, layer)
+                assert snapshot.metadata["normalize_quota"] is False
+                expected = live.physical_to_logical_map[
+                    layer, rank * 5 : (rank + 1) * 5
+                ]
+                for index, tensor in enumerate(weights[layer]):
+                    values = expected.float() + (index - 1 if index >= 2 else 0)
+                    torch.testing.assert_close(
+                        tensor.float(),
+                        values.view(5, *([1] * (tensor.ndim - 1))).expand_as(tensor),
+                        rtol=0,
+                        atol=0,
+                    )
+                    cases += 1
+                result = mlb.route_tokens(
+                    to_routing_request(
+                        layer_id=layer,
+                        logical_topk_ids=ids,
+                        topk_weights=torch.ones_like(ids, dtype=torch.float32),
+                        placement=snapshot,
+                    )
+                )
+                routed = result.routed_physical_topk_ids
+                valid = ids >= 0
+                assert torch.equal(routed[~valid], ids[~valid])
+                assert torch.equal(
+                    live.physical_to_logical_map[layer][routed[valid]], ids[valid].int()
+                )
+                cases += 1
+            # A decode-only DP batch can leave a peer idle. Neither rank may
+            # advance the refresh gate or enter its placement collective.
+            before = dict(manager._refresh_gate._batches_since_refresh)
+            manager._forward_batch.global_forward_mode = None
+            manager._forward_batch.is_extend_in_batch = False
+            manager._forward_batch.forward_mode = SimpleNamespace(
+                is_decode=lambda: rank == 0, is_idle=lambda: rank != 0
+            )
+            for layer in (0, 1):
+                manager.refresh_layer(layer, ids, None)
+            assert manager._refresh_gate._batches_since_refresh == before
+            cases += 1
+            dist.barrier()
+    return cases
 
 
 if __name__ == "__main__":

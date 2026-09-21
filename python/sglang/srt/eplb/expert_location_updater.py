@@ -38,6 +38,45 @@ _LOG_INPUT = get_bool_env_var("SGLANG_EXPERT_LOCATION_UPDATER_LOG_INPUT")
 class ExpertLocationUpdater:
     def __init__(self):
         self._first_execution = True
+        self._layer_temp_buffers = None
+
+    def update_layer(self, weights, metadata, layer_id, *, nnodes, rank):
+        """Commit a one-layer plan before dispatch, using the native P2P mover."""
+        live = get_global_expert_location_metadata()
+        assert live is not None and metadata.num_layers == 1
+        if self._layer_temp_buffers is None:
+            # The native mover uses the default process group. Initialize its
+            # NCCL communicator on every rank before a subset first uses P2P.
+            torch.distributed.barrier()
+        if (
+            self._layer_temp_buffers is None
+            or any(
+                a.shape != b.shape or a.dtype != b.dtype or a.device != b.device
+                for a, b in zip(self._layer_temp_buffers, weights)
+            )
+            or len(self._layer_temp_buffers) != len(weights)
+        ):
+            self._layer_temp_buffers = create_temp_buffers(weights)
+        world_size = torch.distributed.get_world_size()
+        missing = []
+        update_expert_weights_single_layer(
+            routed_experts_weights=weights,
+            temp_buffers=self._layer_temp_buffers,
+            old_physical_to_logical_map=live.physical_to_logical_map_cpu[
+                layer_id
+            ].tolist(),
+            new_physical_to_logical_map=metadata.physical_to_logical_map_cpu[
+                0
+            ].tolist(),
+            num_local_physical_experts=live.num_local_physical_experts,
+            num_gpu_per_node=world_size // nnodes,
+            rank=rank,
+            world_size=world_size,
+            missing_logical_experts_info=missing,
+        )
+        if missing:
+            raise RuntimeError(f"MLB layer refresh lost expert weights: {missing}")
+        live.update(metadata, [layer_id], source_layer_ids=[0])
 
     def update(
         self,

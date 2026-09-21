@@ -224,6 +224,7 @@ class TestMLBRuntimeContext(unittest.TestCase):
         mlb = Mock()
         runner = SimpleNamespace(
             moe_load_balancer=mlb,
+            eplb_manager=Mock(refreshes_per_layer=True),
             model=SimpleNamespace(modules=lambda: [object(), topk, hash_topk]),
         )
         context = object()
@@ -237,6 +238,10 @@ class TestMLBRuntimeContext(unittest.TestCase):
             ModelRunner._prepare_moe_topk(runner)
         self.assertIs(topk.moe_load_balancer, mlb)
         self.assertIs(hash_topk.moe_load_balancer, mlb)
+        self.assertIs(topk.mlb_placement_refresh, runner.eplb_manager.refresh_layer)
+        self.assertIs(
+            hash_topk.mlb_placement_refresh, runner.eplb_manager.refresh_layer
+        )
         commit.assert_called_once_with(mlb, context, [2, 3])
 
     @unittest.skipUnless(

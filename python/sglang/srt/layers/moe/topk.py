@@ -566,6 +566,7 @@ class TopK(BaseFusedOp):
         )
 
         self.moe_load_balancer = None
+        self.mlb_placement_refresh = None
         if self.mlb_routes_shared_expert:
             top_k -= num_fused_shared_experts
             num_fused_shared_experts = 0
@@ -623,6 +624,10 @@ class TopK(BaseFusedOp):
 
         from sglang.srt.eplb.moe_load_balancer_glue import route_topk_with_mlb
 
+        if self.mlb_placement_refresh is not None:
+            self.mlb_placement_refresh(
+                self.layer_id, topk_output.topk_ids, forward_batch
+            )
         return route_topk_with_mlb(
             moe_load_balancer=self.moe_load_balancer,
             layer_id=self.layer_id,

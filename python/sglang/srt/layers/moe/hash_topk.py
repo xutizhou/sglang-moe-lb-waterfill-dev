@@ -64,6 +64,7 @@ class HashTopK(nn.Module):
             and capabilities.routes_shared_expert
         )
         self.moe_load_balancer = None
+        self.mlb_placement_refresh = None
         if self.mlb_routes_shared_expert:
             topk -= num_fused_shared_experts
             num_fused_shared_experts = 0
@@ -160,6 +161,10 @@ class HashTopK(nn.Module):
 
         from sglang.srt.eplb.moe_load_balancer_glue import route_topk_with_mlb
 
+        if self.mlb_placement_refresh is not None:
+            self.mlb_placement_refresh(
+                self.layer_id, topk_output.topk_ids, forward_batch
+            )
         return route_topk_with_mlb(
             moe_load_balancer=self.moe_load_balancer,
             layer_id=self.layer_id,

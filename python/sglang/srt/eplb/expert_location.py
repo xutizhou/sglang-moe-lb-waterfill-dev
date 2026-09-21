@@ -17,7 +17,8 @@ from __future__ import annotations
 import json
 import logging
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterable, List, Optional
 
@@ -69,7 +70,7 @@ class ExpertLocationMetadata:
     ep_size: int
     # (layers, num_logical_experts)
     logical_to_rank_dispatch_physical_map: Optional[torch.Tensor]
-    mlb_routing_metadata: dict = field(default_factory=dict)
+    mlb_routing_metadata: dict = dataclass_field(default_factory=dict)
 
     # -------------------------------- properties ------------------------------------
 
@@ -344,7 +345,10 @@ class ExpertLocationMetadata:
         self,
         other: ExpertLocationMetadata,
         update_layer_ids: List[int],
+        source_layer_ids: Optional[List[int]] = None,
     ):
+        if source_layer_ids is not None:
+            assert len(source_layer_ids) == len(update_layer_ids)
         for field in [
             "ep_size",
         ]:
@@ -362,6 +366,10 @@ class ExpertLocationMetadata:
             self_field = getattr(self, field)
             assert (other_field is not None) == (self_field is not None)
             if self_field is not None:
+                if source_layer_ids is not None:
+                    for dst, src in zip(update_layer_ids, source_layer_ids):
+                        self_field[dst].copy_(other_field[src])
+                    continue
                 mask_update = torch.tensor(
                     [i in update_layer_ids for i in range(self.num_layers)]
                 )
@@ -369,10 +377,13 @@ class ExpertLocationMetadata:
                 mask_update = mask_update.to(self_field.device, non_blocking=True)
                 self_field[...] = torch.where(mask_update, other_field, self_field)
 
-        for layer_id in update_layer_ids:
-            if layer_id in other.mlb_routing_metadata:
+        for layer_id, source_id in zip(
+            update_layer_ids,
+            update_layer_ids if source_layer_ids is None else source_layer_ids,
+        ):
+            if source_id in other.mlb_routing_metadata:
                 self.mlb_routing_metadata[layer_id] = other.mlb_routing_metadata[
-                    layer_id
+                    source_id
                 ]
             else:
                 self.mlb_routing_metadata.pop(layer_id, None)
