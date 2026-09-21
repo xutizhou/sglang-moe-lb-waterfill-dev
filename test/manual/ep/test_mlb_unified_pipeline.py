@@ -14,7 +14,11 @@ from unittest.mock import patch
 import torch
 import torch.distributed as dist
 from moe_load_balancer import MoELoadBalancer
-from moe_load_balancer.adapters.sglang import placement, runtime, to_placement_request
+from moe_load_balancer.adapters.sglang import (
+    placement,
+    to_load_balancer_kwargs,
+    to_placement_request,
+)
 
 from sglang.srt.eplb import moe_load_balancer_glue as glue
 from sglang.srt.layers.moe.topk import StandardTopKOutput
@@ -154,8 +158,8 @@ def main():
                 "num_local_physical_experts": 2,
             },
         ):
-            mlb = runtime.create_load_balancer(context)
-        runtime.commit_placement(mlb, context, [0])
+            mlb = MoELoadBalancer.from_algorithm(**to_load_balancer_kwargs(context))
+        glue.commit_mlb_placement(mlb, context, [0])
         _run_l2_mode(mlb, metadata, recorder, rank, mode, device, context)
         replacement = _Metadata(device, rank)
         replacement.physical_to_logical_map = replacement.physical_to_logical_map.flip(
@@ -168,7 +172,7 @@ def main():
             replacement.logical_to_rank_dispatch_physical_map.flip(-1)
         )
         context.resources.expert_location_metadata = replacement
-        runtime.commit_placement(mlb, context, [0])
+        glue.commit_mlb_placement(mlb, context, [0])
         _run_l2_mode(mlb, replacement, recorder, rank, mode, device, context)
         context.resources.expert_location_metadata = metadata
         dist.barrier()

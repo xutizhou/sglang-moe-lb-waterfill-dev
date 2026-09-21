@@ -26,7 +26,7 @@ class TestMLBRuntimeContext(unittest.TestCase):
     )
     def test_bootstrap_uses_explicit_context_before_metadata_exists(self):
         from moe_load_balancer import MoELoadBalancer
-        from moe_load_balancer.adapters.sglang import create_load_balancer
+        from moe_load_balancer.adapters.sglang import to_load_balancer_kwargs
 
         context = RuntimeContext(ParallelContext())
         model_config = object()
@@ -45,7 +45,12 @@ class TestMLBRuntimeContext(unittest.TestCase):
             ) as extract,
         ):
             self.assertIsNone(context.resources.expert_location_metadata)
-            mlb = create_load_balancer(context)
+            kwargs = to_load_balancer_kwargs(context)
+            self.assertEqual(kwargs["algorithm"], "static")
+            self.assertEqual(kwargs["ep_size"], 2)
+            self.assertEqual(kwargs["source_rank"], 1)
+            self.assertEqual(kwargs["experts_per_rank"], 2)
+            mlb = MoELoadBalancer.from_algorithm(**kwargs)
             self.assertIs(type(mlb), MoELoadBalancer)
             layout = ExpertLocationMetadata._init_common(model_config, context=context)
             self.assertEqual(layout["num_physical_experts"], 4)
@@ -60,6 +65,7 @@ class TestMLBRuntimeContext(unittest.TestCase):
         from sglang.srt.model_executor.model_runner import ModelRunner
 
         context, mlb = object(), object()
+        kwargs = dict(algorithm="static", ep_size=2, source_rank=1, experts_per_rank=2)
         with (
             patch("sglang.srt.runtime_context.get_context", return_value=context),
             patch(
@@ -69,7 +75,11 @@ class TestMLBRuntimeContext(unittest.TestCase):
                 ),
             ),
             patch(
-                "moe_load_balancer.adapters.sglang.create_load_balancer",
+                "moe_load_balancer.adapters.sglang.to_load_balancer_kwargs",
+                return_value=kwargs,
+            ) as adapt,
+            patch(
+                "moe_load_balancer.MoELoadBalancer.from_algorithm",
                 return_value=mlb,
             ) as create,
         ):
@@ -77,7 +87,8 @@ class TestMLBRuntimeContext(unittest.TestCase):
                 SimpleNamespace(is_draft_worker=False)
             )
         self.assertIs(result, mlb)
-        create.assert_called_once_with(context)
+        adapt.assert_called_once_with(context)
+        create.assert_called_once_with(**kwargs)
 
     @unittest.skipUnless(
         importlib.util.find_spec("moe_load_balancer"),
@@ -151,7 +162,9 @@ class TestMLBRuntimeContext(unittest.TestCase):
         context = object()
         with (
             patch("sglang.srt.runtime_context.get_context", return_value=context),
-            patch("moe_load_balancer.adapters.sglang.commit_placement") as commit,
+            patch(
+                "sglang.srt.eplb.moe_load_balancer_glue.commit_mlb_placement"
+            ) as commit,
         ):
             ModelRunner._prepare_moe_topk(runner)
         self.assertIs(topk.moe_load_balancer, mlb)
@@ -186,7 +199,7 @@ class TestMLBRuntimeContext(unittest.TestCase):
         module = "sglang.srt.eplb.eplb_manager"
         with (
             patch(
-                "moe_load_balancer.adapters.sglang.commit_placement",
+                "sglang.srt.eplb.moe_load_balancer_glue.commit_mlb_placement",
                 side_effect=lambda core, context, ids: order.append(("commit", ids)),
             ) as commit,
             patch(f"{module}.ElasticEPStateManager.instance", return_value=None),
@@ -277,6 +290,66 @@ class TestMLBRuntimeContext(unittest.TestCase):
         self.assertIs(result.topk_ids, output.topk_ids)
         self.assertIs(result.topk_weights, output.topk_weights)
         self.assertIs(result.router_logits, output.router_logits)
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("moe_load_balancer"),
+        "moe_load_balancer is not installed",
+    )
+    def test_commit_reads_current_resources_and_notifies_each_layer(self):
+        from sglang.srt.eplb.moe_load_balancer_glue import commit_mlb_placement
+
+        mlb = Mock()
+        context = SimpleNamespace(
+            resources=SimpleNamespace(expert_location_metadata=object())
+        )
+        with patch(
+            "moe_load_balancer.adapters.sglang.to_placement_snapshot",
+            side_effect=lambda metadata, layer_id: SimpleNamespace(
+                metadata=metadata, layer_id=layer_id
+            ),
+        ):
+            commit_mlb_placement(mlb, context, [2, 3])
+            snapshots = [
+                call.args[0] for call in mlb.on_placement_committed.call_args_list
+            ]
+            self.assertEqual([snapshot.layer_id for snapshot in snapshots], [2, 3])
+            self.assertTrue(
+                all(
+                    snapshot.metadata is context.resources.expert_location_metadata
+                    for snapshot in snapshots
+                )
+            )
+            context.resources = SimpleNamespace(expert_location_metadata=object())
+            self.assertEqual(mlb.on_placement_committed.call_count, 2)
+            commit_mlb_placement(mlb, context, [3])
+            self.assertEqual(mlb.on_placement_committed.call_count, 3)
+            self.assertIs(
+                mlb.on_placement_committed.call_args.args[0].metadata,
+                context.resources.expert_location_metadata,
+            )
+
+    def test_commit_skips_policies_without_placement_state(self):
+        from sglang.srt.eplb.moe_load_balancer_glue import commit_mlb_placement
+
+        mlb = Mock()
+        mlb.routing_capabilities.requires_placement_state = False
+        commit_mlb_placement(mlb, object(), [2])
+        mlb.on_placement_committed.assert_not_called()
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("moe_load_balancer"),
+        "moe_load_balancer is not installed",
+    )
+    def test_commit_rejects_missing_metadata_before_notifying_core(self):
+        from sglang.srt.eplb.moe_load_balancer_glue import commit_mlb_placement
+
+        mlb = Mock()
+        context = SimpleNamespace(
+            resources=SimpleNamespace(expert_location_metadata=None)
+        )
+        with self.assertRaisesRegex(RuntimeError, "committed expert metadata"):
+            commit_mlb_placement(mlb, context, [2])
+        mlb.on_placement_committed.assert_not_called()
 
     def test_commit_follows_weight_update_and_recovery(self):
         order = []
