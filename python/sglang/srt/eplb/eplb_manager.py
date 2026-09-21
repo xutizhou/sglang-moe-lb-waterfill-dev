@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from functools import partial
 from typing import TYPE_CHECKING, Any, Callable, List
 
 import torch.cuda
@@ -18,7 +19,7 @@ from sglang.srt.eplb.expert_location import (
     get_global_expert_location_metadata,
 )
 from sglang.srt.eplb.expert_location_updater import ExpertLocationUpdater
-from sglang.srt.runtime_context import get_exec, get_model, get_parallel
+from sglang.srt.runtime_context import get_context, get_exec, get_model, get_parallel
 
 if TYPE_CHECKING:
     from sglang.srt.configs.model_config import ModelConfig
@@ -145,6 +146,14 @@ class EPLBManager:
             init_lplb_solvers,
         )
 
+        on_placement_committed = None
+        if self._moe_load_balancer is not None:
+            from moe_load_balancer.adapters.sglang import commit_placement
+
+            on_placement_committed = partial(
+                commit_placement, self._moe_load_balancer, get_context()
+            )
+
         update_layer_ids_chunks = self._compute_update_layer_ids_chunks()
         all_update_layer_ids = [
             layer_id for chunk in update_layer_ids_chunks for layer_id in chunk
@@ -157,11 +166,7 @@ class EPLBManager:
             if len(update_layer_ids_chunks) > 1:
                 yield
             update_expert_location_with_recovery(
-                on_placement_committed=(
-                    self._moe_load_balancer.commit_placement
-                    if self._moe_load_balancer is not None
-                    else None
-                ),
+                on_placement_committed=on_placement_committed,
                 expert_location_updater=self._get_expert_location_updater(),
                 model=self._get_model(),
                 new_expert_location_metadata=expert_location_metadata,

@@ -2,7 +2,7 @@
 
 Run one process per GPU with ``RANK``, ``WORLD_SIZE``, ``MASTER_ADDR`` and
 ``MASTER_PORT`` set. This test uses real NCCL and real MLB Triton policies,
-with a small bound-context fixture for SGLang-owned resources.
+with a small explicit context fixture for SGLang-owned resources.
 """
 
 from __future__ import annotations
@@ -14,8 +14,7 @@ from unittest.mock import patch
 import torch
 import torch.distributed as dist
 from moe_load_balancer import MoELoadBalancer
-from moe_load_balancer.adapters.sglang import to_placement_request
-from moe_load_balancer.adapters.sglang.runtime import _SGLangRuntime
+from moe_load_balancer.adapters.sglang import runtime, to_placement_request
 
 from sglang.srt.eplb import moe_load_balancer_glue as glue
 from sglang.srt.layers.moe.topk import StandardTopKOutput
@@ -78,7 +77,7 @@ def _run_l1_eplb(mlb, device):
     assert plan.logical_to_all_physical_map.shape[:2] == (1, 2)
 
 
-def _run_l2_mode(mlb, metadata, recorder, rank, mode, device):
+def _run_l2_mode(mlb, metadata, recorder, rank, mode, device, context):
     if mode == "combined_idle" and rank != 0:
         logical_ids = torch.empty((0, 2), dtype=torch.int32, device=device)
     elif rank == 0:
@@ -86,23 +85,26 @@ def _run_l2_mode(mlb, metadata, recorder, rank, mode, device):
     else:
         logical_ids = torch.tensor([[0, 1], [1, 1]], dtype=torch.int32, device=device)
     num_tokens = logical_ids.shape[0]
-    output = glue.route_topk_with_mlb(
-        moe_load_balancer=mlb,
-        layer_id=0,
-        topk_output=StandardTopKOutput(
-            topk_weights=torch.ones(
-                (num_tokens, 2), dtype=torch.float32, device=device
+    with patch.object(glue, "get_context", return_value=context):
+        output = glue.route_topk_with_mlb(
+            moe_load_balancer=mlb,
+            layer_id=0,
+            topk_output=StandardTopKOutput(
+                topk_weights=torch.ones(
+                    (num_tokens, 2), dtype=torch.float32, device=device
+                ),
+                topk_ids=logical_ids,
+                router_logits=torch.zeros(
+                    (num_tokens, 2), dtype=torch.float32, device=device
+                ),
             ),
-            topk_ids=logical_ids,
-            router_logits=torch.zeros(
-                (num_tokens, 2), dtype=torch.float32, device=device
+            num_tokens=num_tokens,
+            num_token_non_padded=torch.tensor(
+                num_tokens, dtype=torch.int32, device=device
             ),
-        ),
-        num_tokens=num_tokens,
-        num_token_non_padded=torch.tensor(num_tokens, dtype=torch.int32, device=device),
-        forward_batch=None,
-        routed_scaling_factor=1.0,
-    )
+            forward_batch=None,
+            routed_scaling_factor=1.0,
+        )
 
     expected_width = 3 if mlb.routing_capabilities.routes_shared_expert else 2
     assert output.topk_ids.shape == (num_tokens, expected_width)
@@ -145,16 +147,16 @@ def main():
             moe=SimpleNamespace(moe_load_balancer_algorithm=algorithm)
         )
         with patch.object(
-            _SGLangRuntime,
+            runtime,
             "_expert_layout",
             return_value={
                 "ep_size": 2,
                 "num_local_physical_experts": 2,
             },
         ):
-            mlb = MoELoadBalancer.from_sglang_context(context)
-        mlb.commit_placement([0])
-        _run_l2_mode(mlb, metadata, recorder, rank, mode, device)
+            mlb = runtime.create_load_balancer(context)
+        runtime.commit_placement(mlb, context, [0])
+        _run_l2_mode(mlb, metadata, recorder, rank, mode, device, context)
         replacement = _Metadata(device, rank)
         replacement.physical_to_logical_map = replacement.physical_to_logical_map.flip(
             -1
@@ -166,8 +168,8 @@ def main():
             replacement.logical_to_rank_dispatch_physical_map.flip(-1)
         )
         context.resources.expert_location_metadata = replacement
-        mlb.commit_placement([0])
-        _run_l2_mode(mlb, replacement, recorder, rank, mode, device)
+        runtime.commit_placement(mlb, context, [0])
+        _run_l2_mode(mlb, replacement, recorder, rank, mode, device, context)
         context.resources.expert_location_metadata = metadata
         dist.barrier()
 

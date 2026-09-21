@@ -216,10 +216,15 @@ class ExpertLocationMetadata:
                 )
             )
         else:
+            from moe_load_balancer.adapters.sglang import plan_placement
+
             from sglang.srt.elastic_ep.elastic_ep import ElasticEPStateManager
+            from sglang.srt.runtime_context import get_context
 
             elastic_state = ElasticEPStateManager.instance()
-            maps = moe_load_balancer.plan_placement_from_counts(
+            maps = plan_placement(
+                moe_load_balancer,
+                get_context(),
                 logical_count,
                 use_flat_topology=use_flat_topology,
                 active_ranks=elastic_state.active_ranks

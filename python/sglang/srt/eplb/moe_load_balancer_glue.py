@@ -6,6 +6,8 @@ from typing import Optional
 
 import torch
 
+from sglang.srt.runtime_context import get_context
+
 _FORWARD_MODE_TO_STAGE = {
     "EXTEND": "prefill",
     "DECODE": "decode",
@@ -28,19 +30,30 @@ def route_topk_with_mlb(
 ):
     """Run the configured L2 pipeline and materialize SGLang TopK output."""
 
+    from moe_load_balancer.adapters.sglang import route_topk
+
     from sglang.srt.layers.moe.topk import StandardTopKOutput
 
-    output = moe_load_balancer.route_topk(
+    context = get_context()
+    output = route_topk(
+        moe_load_balancer,
+        context,
         layer_id=layer_id,
-        logical_topk_ids=topk_output.topk_ids,
-        topk_weights=topk_output.topk_weights,
-        router_logits=topk_output.router_logits,
+        topk_output=topk_output,
         token_count=(
             num_token_non_padded if num_token_non_padded is not None else num_tokens
         ),
         stage=_stage_from_forward_batch(forward_batch),
         routed_scaling_factor=routed_scaling_factor,
     )
+    resources = context.resources
+    resources.expert_distribution_recorder.on_select_experts(
+        topk_ids=output.recorded_physical_topk_ids
+    )
+    if resources.experts_capturer is not None:
+        resources.experts_capturer.capture(
+            layer_id=layer_id, topk_indices=output.recorded_physical_topk_ids
+        )
     return StandardTopKOutput(
         topk_weights=output.topk_weights,
         topk_ids=output.topk_ids,
