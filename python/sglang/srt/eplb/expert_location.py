@@ -251,8 +251,6 @@ class ExpertLocationMetadata:
         from sglang.srt.runtime_context import get_context
 
         context = get_context() if context is None else context
-        moe = context.config_bag("exec").moe
-        parallel = context.parallel
 
         model_config_for_expert_location = (
             ModelConfigForExpertLocation.from_model_config(model_config)
@@ -263,17 +261,17 @@ class ExpertLocationMetadata:
 
         base_num_physical_experts = (
             model_config_for_expert_location.num_logical_experts
-            + moe.ep_num_redundant_experts
+            + context.config_bag("exec").moe.ep_num_redundant_experts
         )
         # elastic-EP scale-up rewrites ep_size on the published config
-        ep_size = parallel.ep_size
+        ep_size = context.parallel.ep_size
         num_physical_experts = base_num_physical_experts
-        initial_ep_size = parallel.elastic_ep_initial_size
+        initial_ep_size = context.parallel.elastic_ep_initial_size
         if initial_ep_size is not None:
-            if moe.ep_join_mode == "scale":
+            if context.config_bag("exec").moe.ep_join_mode == "scale":
                 ep_size = max(
                     ep_size,
-                    parallel.ep_join_rank_offset + parallel.tp_size,
+                    context.parallel.ep_join_rank_offset + context.parallel.tp_size,
                 )
             num_physical_experts, num_local_physical_experts = (
                 _compute_elastic_expert_layout(
