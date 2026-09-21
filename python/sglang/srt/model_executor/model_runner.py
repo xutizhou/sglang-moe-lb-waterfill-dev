@@ -718,8 +718,6 @@ class ModelRunner:
         from moe_load_balancer import MoELoadBalancer
         from moe_load_balancer.adapters.sglang import to_load_balancer_kwargs
 
-        from sglang.srt.runtime_context import get_context
-
         kwargs = to_load_balancer_kwargs(get_context())
         return MoELoadBalancer.from_algorithm(**kwargs)
 
@@ -740,8 +738,6 @@ class ModelRunner:
             module.moe_load_balancer = self.moe_load_balancer
             layer_ids.append(module.layer_id)
         from moe_load_balancer.adapters.sglang import commit_placement
-
-        from sglang.srt.runtime_context import get_context
 
         commit_placement(self.moe_load_balancer, get_context(), layer_ids)
 

@@ -67,7 +67,10 @@ class TestMLBRuntimeContext(unittest.TestCase):
         context, mlb = object(), object()
         kwargs = dict(algorithm="static", ep_size=2, source_rank=1, experts_per_rank=2)
         with (
-            patch("sglang.srt.runtime_context.get_context", return_value=context),
+            patch(
+                "sglang.srt.model_executor.model_runner.get_context",
+                return_value=context,
+            ),
             patch(
                 "sglang.srt.model_executor.model_runner.get_exec",
                 return_value=SimpleNamespace(
@@ -161,7 +164,10 @@ class TestMLBRuntimeContext(unittest.TestCase):
         )
         context = object()
         with (
-            patch("sglang.srt.runtime_context.get_context", return_value=context),
+            patch(
+                "sglang.srt.model_executor.model_runner.get_context",
+                return_value=context,
+            ),
             patch("moe_load_balancer.adapters.sglang.commit_placement") as commit,
         ):
             ModelRunner._prepare_moe_topk(runner)
