@@ -711,8 +711,8 @@ class ModelRunner:
     def _create_moe_load_balancer(self):
         if self.is_draft_worker:
             return None
-        moe = get_exec().moe
-        if moe.moe_load_balancer_algorithm is None:
+        server_args = get_exec().moe
+        if server_args.moe_load_balancer_algorithm is None:
             return None
 
         from moe_load_balancer import MoELoadBalancer
