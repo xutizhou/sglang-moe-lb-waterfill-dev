@@ -162,9 +162,7 @@ class TestMLBRuntimeContext(unittest.TestCase):
         context = object()
         with (
             patch("sglang.srt.runtime_context.get_context", return_value=context),
-            patch(
-                "sglang.srt.eplb.moe_load_balancer_glue.commit_mlb_placement"
-            ) as commit,
+            patch("moe_load_balancer.adapters.sglang.commit_placement") as commit,
         ):
             ModelRunner._prepare_moe_topk(runner)
         self.assertIs(topk.moe_load_balancer, mlb)
@@ -199,7 +197,7 @@ class TestMLBRuntimeContext(unittest.TestCase):
         module = "sglang.srt.eplb.eplb_manager"
         with (
             patch(
-                "sglang.srt.eplb.moe_load_balancer_glue.commit_mlb_placement",
+                "moe_load_balancer.adapters.sglang.commit_placement",
                 side_effect=lambda core, context, ids: order.append(("commit", ids)),
             ) as commit,
             patch(f"{module}.ElasticEPStateManager.instance", return_value=None),
@@ -296,19 +294,19 @@ class TestMLBRuntimeContext(unittest.TestCase):
         "moe_load_balancer is not installed",
     )
     def test_commit_reads_current_resources_and_notifies_each_layer(self):
-        from sglang.srt.eplb.moe_load_balancer_glue import commit_mlb_placement
+        from moe_load_balancer.adapters.sglang import commit_placement
 
         mlb = Mock()
         context = SimpleNamespace(
             resources=SimpleNamespace(expert_location_metadata=object())
         )
         with patch(
-            "moe_load_balancer.adapters.sglang.to_placement_snapshot",
+            "moe_load_balancer.adapters.sglang.placement.to_placement_snapshot",
             side_effect=lambda metadata, layer_id: SimpleNamespace(
                 metadata=metadata, layer_id=layer_id
             ),
         ):
-            commit_mlb_placement(mlb, context, [2, 3])
+            commit_placement(mlb, context, [2, 3])
             snapshots = [
                 call.args[0] for call in mlb.on_placement_committed.call_args_list
             ]
@@ -321,19 +319,23 @@ class TestMLBRuntimeContext(unittest.TestCase):
             )
             context.resources = SimpleNamespace(expert_location_metadata=object())
             self.assertEqual(mlb.on_placement_committed.call_count, 2)
-            commit_mlb_placement(mlb, context, [3])
+            commit_placement(mlb, context, [3])
             self.assertEqual(mlb.on_placement_committed.call_count, 3)
             self.assertIs(
                 mlb.on_placement_committed.call_args.args[0].metadata,
                 context.resources.expert_location_metadata,
             )
 
+    @unittest.skipUnless(
+        importlib.util.find_spec("moe_load_balancer"),
+        "moe_load_balancer is not installed",
+    )
     def test_commit_skips_policies_without_placement_state(self):
-        from sglang.srt.eplb.moe_load_balancer_glue import commit_mlb_placement
+        from moe_load_balancer.adapters.sglang import commit_placement
 
         mlb = Mock()
         mlb.routing_capabilities.requires_placement_state = False
-        commit_mlb_placement(mlb, object(), [2])
+        commit_placement(mlb, object(), [2])
         mlb.on_placement_committed.assert_not_called()
 
     @unittest.skipUnless(
@@ -341,14 +343,14 @@ class TestMLBRuntimeContext(unittest.TestCase):
         "moe_load_balancer is not installed",
     )
     def test_commit_rejects_missing_metadata_before_notifying_core(self):
-        from sglang.srt.eplb.moe_load_balancer_glue import commit_mlb_placement
+        from moe_load_balancer.adapters.sglang import commit_placement
 
         mlb = Mock()
         context = SimpleNamespace(
             resources=SimpleNamespace(expert_location_metadata=None)
         )
         with self.assertRaisesRegex(RuntimeError, "committed expert metadata"):
-            commit_mlb_placement(mlb, context, [2])
+            commit_placement(mlb, context, [2])
         mlb.on_placement_committed.assert_not_called()
 
     def test_commit_follows_weight_update_and_recovery(self):

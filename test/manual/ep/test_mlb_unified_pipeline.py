@@ -15,6 +15,7 @@ import torch
 import torch.distributed as dist
 from moe_load_balancer import MoELoadBalancer
 from moe_load_balancer.adapters.sglang import (
+    commit_placement,
     placement,
     to_load_balancer_kwargs,
     to_placement_request,
@@ -159,7 +160,7 @@ def main():
             },
         ):
             mlb = MoELoadBalancer.from_algorithm(**to_load_balancer_kwargs(context))
-        glue.commit_mlb_placement(mlb, context, [0])
+        commit_placement(mlb, context, [0])
         _run_l2_mode(mlb, metadata, recorder, rank, mode, device, context)
         replacement = _Metadata(device, rank)
         replacement.physical_to_logical_map = replacement.physical_to_logical_map.flip(
@@ -172,7 +173,7 @@ def main():
             replacement.logical_to_rank_dispatch_physical_map.flip(-1)
         )
         context.resources.expert_location_metadata = replacement
-        glue.commit_mlb_placement(mlb, context, [0])
+        commit_placement(mlb, context, [0])
         _run_l2_mode(mlb, replacement, recorder, rank, mode, device, context)
         context.resources.expert_location_metadata = metadata
         dist.barrier()

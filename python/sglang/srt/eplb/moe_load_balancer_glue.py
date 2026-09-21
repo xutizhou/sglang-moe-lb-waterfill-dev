@@ -18,20 +18,6 @@ _FORWARD_MODE_TO_STAGE = {
 }
 
 
-def commit_mlb_placement(moe_load_balancer, context, layer_ids):
-    """Notify MLB after SGLang commits the placement and corresponding weights."""
-    if not moe_load_balancer.routing_capabilities.requires_placement_state:
-        return
-    from moe_load_balancer.adapters.sglang import to_placement_snapshot
-
-    metadata = context.resources.expert_location_metadata
-    if metadata is None:
-        raise RuntimeError("MLB routing requires committed expert metadata.")
-    for layer_id in layer_ids:
-        snapshot = to_placement_snapshot(metadata, layer_id)
-        moe_load_balancer.on_placement_committed(snapshot)
-
-
 def route_topk_with_mlb(
     *,
     moe_load_balancer,

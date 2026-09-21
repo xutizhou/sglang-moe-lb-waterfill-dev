@@ -739,10 +739,11 @@ class ModelRunner:
                 )
             module.moe_load_balancer = self.moe_load_balancer
             layer_ids.append(module.layer_id)
-        from sglang.srt.eplb.moe_load_balancer_glue import commit_mlb_placement
+        from moe_load_balancer.adapters.sglang import commit_placement
+
         from sglang.srt.runtime_context import get_context
 
-        commit_mlb_placement(self.moe_load_balancer, get_context(), layer_ids)
+        commit_placement(self.moe_load_balancer, get_context(), layer_ids)
 
     def maybe_init_expert_location_metadata(self):
         if self.is_draft_worker:

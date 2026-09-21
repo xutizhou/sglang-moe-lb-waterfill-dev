@@ -148,10 +148,10 @@ class EPLBManager:
 
         on_placement_committed = None
         if self._moe_load_balancer is not None:
-            from sglang.srt.eplb.moe_load_balancer_glue import commit_mlb_placement
+            from moe_load_balancer.adapters.sglang import commit_placement
 
             on_placement_committed = partial(
-                commit_mlb_placement, self._moe_load_balancer, get_context()
+                commit_placement, self._moe_load_balancer, get_context()
             )
 
         update_layer_ids_chunks = self._compute_update_layer_ids_chunks()
