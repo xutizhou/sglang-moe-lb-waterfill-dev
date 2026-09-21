@@ -16,7 +16,6 @@ import torch.distributed as dist
 from moe_load_balancer import MoELoadBalancer
 from moe_load_balancer.adapters.sglang import (
     commit_placement,
-    placement,
     to_load_balancer_kwargs,
     to_placement_request,
 )
@@ -131,8 +130,14 @@ def main():
     metadata = _Metadata(device, rank)
     ep_group = _EPGroup()
     context = SimpleNamespace(
-        parallel=SimpleNamespace(moe_ep_rank=rank, moe_ep_group=ep_group),
+        parallel=SimpleNamespace(
+            moe_ep_rank=rank,
+            moe_ep_group=ep_group,
+            ep_size=2,
+            elastic_ep_initial_size=None,
+        ),
         resources=SimpleNamespace(
+            mlb_model_info={"num_logical_experts": 2, "num_groups": None},
             expert_location_metadata=metadata,
             expert_distribution_recorder=recorder,
             experts_capturer=None,
@@ -149,17 +154,11 @@ def main():
     }
     for mode, algorithm in modes.items():
         context.config_bag = lambda name: SimpleNamespace(
-            moe=SimpleNamespace(moe_load_balancer_algorithm=algorithm)
+            moe=SimpleNamespace(
+                moe_load_balancer_algorithm=algorithm, ep_num_redundant_experts=2
+            )
         )
-        with patch.object(
-            placement,
-            "_expert_layout",
-            return_value={
-                "ep_size": 2,
-                "num_local_physical_experts": 2,
-            },
-        ):
-            mlb = MoELoadBalancer.from_algorithm(**to_load_balancer_kwargs(context))
+        mlb = MoELoadBalancer.from_algorithm(**to_load_balancer_kwargs(context))
         commit_placement(mlb, context, [0])
         _run_l2_mode(mlb, metadata, recorder, rank, mode, device, context)
         replacement = _Metadata(device, rank)

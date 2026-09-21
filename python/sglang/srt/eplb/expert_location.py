@@ -247,7 +247,7 @@ class ExpertLocationMetadata:
         )
 
     @staticmethod
-    def _init_common(model_config: ModelConfig, *, context=None):
+    def _init_common(model_config: ModelConfig):
         model_config_for_expert_location = (
             ModelConfigForExpertLocation.from_model_config(model_config)
         )

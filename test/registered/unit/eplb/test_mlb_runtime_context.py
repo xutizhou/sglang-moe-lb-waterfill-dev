@@ -28,6 +28,8 @@ class TestMLBRuntimeContext(unittest.TestCase):
         from moe_load_balancer import MoELoadBalancer
         from moe_load_balancer.adapters.sglang import to_load_balancer_kwargs
 
+        from sglang.srt.model_executor.model_runner import ModelRunner
+
         context = get_context()
         model_config = object()
         with (
@@ -35,27 +37,77 @@ class TestMLBRuntimeContext(unittest.TestCase):
                 moe_load_balancer_algorithm="static",
                 ep_size=2,
                 ep_num_redundant_experts=2,
-                _model_config=model_config,
             ),
             context.parallel.override(moe_ep_rank=1),
+            context.resources.override(mlb_model_info=None),
             patch.object(
                 ModelConfigForExpertLocation,
                 "from_model_config",
                 return_value=ModelConfigForExpertLocation(1, 2, 1),
             ) as extract,
+            patch.object(
+                ExpertLocationMetadata,
+                "_init_common",
+                side_effect=AssertionError("MLB must not call SGLang's layout helper"),
+            ),
         ):
             self.assertIsNone(context.resources.expert_location_metadata)
+            mlb = ModelRunner._create_moe_load_balancer(
+                SimpleNamespace(is_draft_worker=False, model_config=model_config)
+            )
+            self.assertEqual(
+                context.resources.mlb_model_info,
+                {"num_logical_experts": 2, "num_groups": 1},
+            )
             kwargs = to_load_balancer_kwargs(context)
             self.assertEqual(kwargs["algorithm"], "static")
             self.assertEqual(kwargs["ep_size"], 2)
             self.assertEqual(kwargs["source_rank"], 1)
             self.assertEqual(kwargs["experts_per_rank"], 2)
-            mlb = MoELoadBalancer.from_algorithm(**kwargs)
             self.assertIs(type(mlb), MoELoadBalancer)
-            layout = ExpertLocationMetadata._init_common(model_config, context=context)
-            self.assertEqual(layout["num_physical_experts"], 4)
-            self.assertEqual(layout["num_local_physical_experts"], 2)
-            extract.assert_called_with(model_config)
+            extract.assert_called_once_with(model_config)
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("moe_load_balancer"),
+        "moe_load_balancer is not installed",
+    )
+    def test_context_layout_matches_sglang_initial_geometry(self):
+        from moe_load_balancer.adapters.sglang.placement import _expert_layout
+
+        context = get_context()
+        cases = [
+            dict(ep_size=2),
+            dict(ep_size=4, elastic_ep_initial_size=2),
+            dict(
+                ep_size=2,
+                elastic_ep_initial_size=2,
+                ep_join_mode="scale",
+                ep_join_rank_offset=4,
+                tp_size=4,
+            ),
+        ]
+        for fields in cases:
+            with (
+                self.subTest(**fields),
+                context.override_server_args(ep_num_redundant_experts=2, **fields),
+                context.resources.override(
+                    mlb_model_info={"num_logical_experts": 6, "num_groups": None}
+                ),
+                patch.object(
+                    ModelConfigForExpertLocation,
+                    "from_model_config",
+                    return_value=ModelConfigForExpertLocation(1, 6, None),
+                ),
+            ):
+                expected = ExpertLocationMetadata._init_common(object())
+                actual = _expert_layout(context)
+                for field in (
+                    "ep_size",
+                    "num_physical_experts",
+                    "num_local_physical_experts",
+                ):
+                    self.assertEqual(actual[field], expected[field])
+                self.assertIsNone(actual["num_groups"])
 
     @unittest.skipUnless(
         importlib.util.find_spec("moe_load_balancer"),
@@ -64,9 +116,15 @@ class TestMLBRuntimeContext(unittest.TestCase):
     def test_model_runner_creates_core_through_context_adapter(self):
         from sglang.srt.model_executor.model_runner import ModelRunner
 
-        context, mlb = object(), object()
+        context = SimpleNamespace(resources=SimpleNamespace(mlb_model_info=None))
+        model_config, mlb = object(), object()
         kwargs = dict(algorithm="static", ep_size=2, source_rank=1, experts_per_rank=2)
         with (
+            patch.object(
+                ModelConfigForExpertLocation,
+                "from_model_config",
+                return_value=ModelConfigForExpertLocation(1, 2, 1),
+            ) as extract,
             patch(
                 "sglang.srt.model_executor.model_runner.get_context",
                 return_value=context,
@@ -87,9 +145,10 @@ class TestMLBRuntimeContext(unittest.TestCase):
             ) as create,
         ):
             result = ModelRunner._create_moe_load_balancer(
-                SimpleNamespace(is_draft_worker=False)
+                SimpleNamespace(is_draft_worker=False, model_config=model_config)
             )
         self.assertIs(result, mlb)
+        extract.assert_called_once_with(model_config)
         adapt.assert_called_once_with(context)
         create.assert_called_once_with(**kwargs)
 

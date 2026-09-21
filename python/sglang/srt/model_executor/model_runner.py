@@ -61,6 +61,7 @@ from sglang.srt.eplb.expert_distribution import (
 )
 from sglang.srt.eplb.expert_location import (
     ExpertLocationMetadata,
+    ModelConfigForExpertLocation,
     append_trivial_expert_slots,
     broadcast_global_expert_location_metadata,
     compute_initial_expert_location_metadata,
@@ -718,7 +719,17 @@ class ModelRunner:
         from moe_load_balancer import MoELoadBalancer
         from moe_load_balancer.adapters.sglang import to_load_balancer_kwargs
 
-        kwargs = to_load_balancer_kwargs(get_context())
+        context = get_context()
+        model_info = ModelConfigForExpertLocation.from_model_config(self.model_config)
+        context.resources.mlb_model_info = (
+            {
+                "num_logical_experts": model_info.num_logical_experts,
+                "num_groups": model_info.num_groups,
+            }
+            if model_info is not None
+            else None
+        )
+        kwargs = to_load_balancer_kwargs(context)
         return MoELoadBalancer.from_algorithm(**kwargs)
 
     def _prepare_moe_topk(self):
