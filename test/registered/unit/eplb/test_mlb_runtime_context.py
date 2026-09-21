@@ -13,7 +13,7 @@ from sglang.srt.eplb.expert_location import (
     ExpertLocationMetadata,
     ModelConfigForExpertLocation,
 )
-from sglang.srt.runtime_context import ParallelContext, RuntimeContext
+from sglang.srt.runtime_context import get_context
 from sglang.test.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=1, suite="base-a-test-cpu")
@@ -24,11 +24,11 @@ class TestMLBRuntimeContext(unittest.TestCase):
         importlib.util.find_spec("moe_load_balancer"),
         "moe_load_balancer is not installed",
     )
-    def test_bootstrap_uses_explicit_context_before_metadata_exists(self):
+    def test_bootstrap_uses_runtime_context_before_metadata_exists(self):
         from moe_load_balancer import MoELoadBalancer
         from moe_load_balancer.adapters.sglang import to_load_balancer_kwargs
 
-        context = RuntimeContext(ParallelContext())
+        context = get_context()
         model_config = object()
         with (
             context.override_server_args(
