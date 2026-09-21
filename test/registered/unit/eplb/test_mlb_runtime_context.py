@@ -95,6 +95,7 @@ class TestMLBRuntimeContext(unittest.TestCase):
         maps = SimpleNamespace(
             physical_to_logical_map=mapping, logical_to_all_physical_map=mapping
         )
+        request = object()
         layout = dict(
             ep_size=2,
             num_physical_experts=4,
@@ -110,8 +111,12 @@ class TestMLBRuntimeContext(unittest.TestCase):
                 return_value=None,
             ),
             patch(
-                "moe_load_balancer.adapters.sglang.plan_placement", return_value=maps
-            ) as plan,
+                "moe_load_balancer.adapters.sglang.to_placement_request",
+                return_value=request,
+            ) as adapt_request,
+            patch(
+                "moe_load_balancer.adapters.sglang.to_sglang_maps", return_value=maps
+            ) as adapt_result,
         ):
             result = ExpertLocationMetadata.init_by_eplb(
                 model_config,
@@ -119,9 +124,11 @@ class TestMLBRuntimeContext(unittest.TestCase):
                 use_flat_topology=True,
                 moe_load_balancer=mlb,
             )
-        plan.assert_called_once_with(
-            mlb, context, counts, use_flat_topology=True, active_ranks=None
+        adapt_request.assert_called_once_with(
+            counts, context=context, num_nodes=1, active_ranks=None
         )
+        mlb.plan_placement.assert_called_once_with(request)
+        adapt_result.assert_called_once_with(mlb.plan_placement.return_value)
         self.assertIs(result, initialize.return_value)
         self.assertIs(initialize.call_args.kwargs["physical_to_logical_map"], mapping)
 
@@ -220,12 +227,21 @@ class TestMLBRuntimeContext(unittest.TestCase):
                 experts_capturer=Mock(),
             )
         )
-        mlb, topk = object(), object()
+        mlb = Mock()
+        topk = SimpleNamespace(
+            topk_ids=object(), topk_weights=object(), router_logits=object()
+        )
+        request = object()
         with (
             patch.object(glue, "get_context", return_value=context),
             patch(
-                "moe_load_balancer.adapters.sglang.route_topk", return_value=output
-            ) as route,
+                "moe_load_balancer.adapters.sglang.to_routing_request",
+                return_value=request,
+            ) as adapt_request,
+            patch(
+                "moe_load_balancer.adapters.sglang.to_sglang_routing_output",
+                return_value=output,
+            ) as adapt_result,
         ):
             result = glue.route_topk_with_mlb(
                 moe_load_balancer=mlb,
@@ -236,13 +252,20 @@ class TestMLBRuntimeContext(unittest.TestCase):
                 forward_batch=None,
                 routed_scaling_factor=1.0,
             )
-        route.assert_called_once_with(
-            mlb,
-            context,
+        adapt_request.assert_called_once_with(
+            context=context,
             layer_id=3,
-            topk_output=topk,
+            logical_topk_ids=topk.topk_ids,
+            topk_weights=topk.topk_weights,
             token_count=2,
             stage=None,
+            routed_scaling_factor=1.0,
+        )
+        mlb.route_tokens.assert_called_once_with(request)
+        adapt_result.assert_called_once_with(
+            mlb.route_tokens.return_value,
+            context=context,
+            router_logits=topk.router_logits,
             routed_scaling_factor=1.0,
         )
         context.resources.expert_distribution_recorder.on_select_experts.assert_called_once_with(

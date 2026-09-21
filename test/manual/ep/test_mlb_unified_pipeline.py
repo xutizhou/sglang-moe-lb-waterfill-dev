@@ -14,7 +14,7 @@ from unittest.mock import patch
 import torch
 import torch.distributed as dist
 from moe_load_balancer import MoELoadBalancer
-from moe_load_balancer.adapters.sglang import runtime, to_placement_request
+from moe_load_balancer.adapters.sglang import placement, runtime, to_placement_request
 
 from sglang.srt.eplb import moe_load_balancer_glue as glue
 from sglang.srt.layers.moe.topk import StandardTopKOutput
@@ -147,7 +147,7 @@ def main():
             moe=SimpleNamespace(moe_load_balancer_algorithm=algorithm)
         )
         with patch.object(
-            runtime,
+            placement,
             "_expert_layout",
             return_value={
                 "ep_size": 2,

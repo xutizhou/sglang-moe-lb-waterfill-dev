@@ -30,20 +30,30 @@ def route_topk_with_mlb(
 ):
     """Run the configured L2 pipeline and materialize SGLang TopK output."""
 
-    from moe_load_balancer.adapters.sglang import route_topk
+    from moe_load_balancer.adapters.sglang import (
+        to_routing_request,
+        to_sglang_routing_output,
+    )
 
     from sglang.srt.layers.moe.topk import StandardTopKOutput
 
     context = get_context()
-    output = route_topk(
-        moe_load_balancer,
-        context,
+    request = to_routing_request(
+        context=context,
         layer_id=layer_id,
-        topk_output=topk_output,
+        logical_topk_ids=topk_output.topk_ids,
+        topk_weights=topk_output.topk_weights,
         token_count=(
             num_token_non_padded if num_token_non_padded is not None else num_tokens
         ),
         stage=_stage_from_forward_batch(forward_batch),
+        routed_scaling_factor=routed_scaling_factor,
+    )
+    decision = moe_load_balancer.route_tokens(request)
+    output = to_sglang_routing_output(
+        decision,
+        context=context,
+        router_logits=topk_output.router_logits,
         routed_scaling_factor=routed_scaling_factor,
     )
     resources = context.resources
