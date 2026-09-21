@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterable, List, Optional
 
@@ -69,6 +69,7 @@ class ExpertLocationMetadata:
     ep_size: int
     # (layers, num_logical_experts)
     logical_to_rank_dispatch_physical_map: Optional[torch.Tensor]
+    mlb_routing_metadata: dict = field(default_factory=dict)
 
     # -------------------------------- properties ------------------------------------
 
@@ -197,6 +198,7 @@ class ExpertLocationMetadata:
         num_groups = model_config_for_expert_location.num_groups
         num_nodes = 1 if use_flat_topology else get_parallel().nnodes
 
+        routing_metadata = {}
         if moe_load_balancer is None:
             from sglang.srt.eplb import eplb_algorithms
 
@@ -237,6 +239,7 @@ class ExpertLocationMetadata:
             maps = to_sglang_maps(plan)
             physical_to_logical_map = maps.physical_to_logical_map
             logical_to_all_physical_map = maps.logical_to_all_physical_map
+            routing_metadata = maps.routing_metadata
 
         return ExpertLocationMetadata._init_raw(
             ep_size=common["ep_size"],
@@ -244,6 +247,7 @@ class ExpertLocationMetadata:
             logical_to_all_physical_map=logical_to_all_physical_map.to(
                 get_device().device
             ),
+            mlb_routing_metadata=routing_metadata,
         )
 
     @staticmethod
@@ -294,6 +298,7 @@ class ExpertLocationMetadata:
         physical_to_logical_map: torch.Tensor,
         logical_to_all_physical_map: torch.Tensor,
         moe_ep_rank: Optional[int] = None,
+        mlb_routing_metadata: Optional[dict] = None,
     ):
 
         _, num_physical_experts = physical_to_logical_map.shape
@@ -309,6 +314,7 @@ class ExpertLocationMetadata:
         )
 
         return ExpertLocationMetadata(
+            mlb_routing_metadata=mlb_routing_metadata or {},
             physical_to_logical_map=physical_to_logical_map,
             physical_to_logical_map_cpu=physical_to_logical_map.cpu(),
             logical_to_all_physical_map=logical_to_all_physical_map_padded,
@@ -362,6 +368,14 @@ class ExpertLocationMetadata:
                 mask_update = mask_update.view(*([-1] + [1] * (self_field.dim() - 1)))
                 mask_update = mask_update.to(self_field.device, non_blocking=True)
                 self_field[...] = torch.where(mask_update, other_field, self_field)
+
+        for layer_id in update_layer_ids:
+            if layer_id in other.mlb_routing_metadata:
+                self.mlb_routing_metadata[layer_id] = other.mlb_routing_metadata[
+                    layer_id
+                ]
+            else:
+                self.mlb_routing_metadata.pop(layer_id, None)
 
     # -------------------------------- usage ------------------------------------
 
@@ -795,6 +809,25 @@ def compute_initial_expert_location_metadata(
 ) -> Optional[ExpertLocationMetadata]:
     data = get_exec().moe.init_expert_location
     if data == "trivial":
+        if (
+            moe_load_balancer is not None
+            and moe_load_balancer.placement_policy is not None
+        ):
+            common = ExpertLocationMetadata._init_common(model_config)
+            if common is None:
+                return None
+            model_info = common["model_config_for_expert_location"]
+            mapping = moe_load_balancer.build_initial_physical_to_logical_map(
+                num_layers=model_info.num_layers,
+                num_logical_experts=model_info.num_logical_experts,
+                ep_size=common["ep_size"],
+                num_redundant_experts_per_rank=(
+                    get_exec().moe.ep_num_redundant_experts // common["ep_size"]
+                ),
+            )
+            return ExpertLocationMetadata.init_by_mapping(
+                model_config, mapping, moe_ep_rank=moe_ep_rank
+            )
         return ExpertLocationMetadata.init_trivial(model_config, moe_ep_rank)
 
     # TODO unify with the utils function
@@ -806,6 +839,14 @@ def compute_initial_expert_location_metadata(
         data_dict = json.loads(data)
 
     if "physical_to_logical_map" in data_dict:
+        if (
+            moe_load_balancer is not None
+            and moe_load_balancer.placement_policy is not None
+        ):
+            raise ValueError(
+                "Coupled MLB routing requires per-rank logical_count statistics, "
+                "not a physical mapping without routing metadata."
+            )
         logger.info(
             "init_expert_location from init_by_mapping using ServerArgs.init_expert_location"
         )
@@ -815,6 +856,15 @@ def compute_initial_expert_location_metadata(
             moe_ep_rank=moe_ep_rank,
         )
     elif "logical_count" in data_dict:
+        if (
+            moe_load_balancer is not None
+            and moe_load_balancer.routing_capabilities.placement_requires_rank_counts
+            and data_dict.get("logical_count_layout") != "rank_layer_expert"
+        ):
+            raise ValueError(
+                "This MLB placement policy requires statistics recorded per source EP rank. "
+                "The recording must declare logical_count_layout='rank_layer_expert'."
+            )
         logger.info(
             "init_expert_location from init_by_eplb using ServerArgs.init_expert_location"
         )

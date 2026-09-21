@@ -325,6 +325,8 @@ class _SinglePassGatherer(ABC):
         expert_location_metadata: ExpertLocationMetadata,
         rank: int,
     ) -> _SinglePassGatherer:
+        if _placement_requires_rank_counts():
+            return _SelectExpertsSinglePassGatherer(expert_location_metadata, rank)
         if get_exec().moe.expert_distribution_recorder_mode == "per_token":
             return _DetailSinglePassGatherer(expert_location_metadata, rank)
 
@@ -931,6 +933,15 @@ class _DetailAccumulator(_UtilizationRateAccumulatorMixin):
         )
 
 
+def _placement_requires_rank_counts() -> bool:
+    from sglang.srt.eplb.moe_load_balancer_glue import get_moe_load_balancer_pipeline
+
+    pipeline = get_moe_load_balancer_pipeline(
+        get_exec().moe.moe_load_balancer_algorithm
+    )
+    return pipeline is not None and pipeline.capabilities.placement_requires_rank_counts
+
+
 class _StatAccumulator(_UtilizationRateAccumulatorMixin):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -975,15 +986,26 @@ class _StatAccumulator(_UtilizationRateAccumulatorMixin):
             self._first_dump = False
             torch.get_device_module().empty_cache()
 
-        torch.distributed.all_reduce(
-            logical_count_of_buffered_step, op=torch.distributed.ReduceOp.SUM
-        )
+        if _placement_requires_rank_counts():
+            from sglang.srt.runtime_context import get_parallel
+
+            group = get_parallel().moe_ep_group
+            local_count = logical_count_of_buffered_step.sum(dim=0).contiguous()
+            logical_count_of_buffered_step = group.all_gather(
+                local_count, dim=0
+            ).reshape(group.world_size, *local_count.shape)
+        else:
+            torch.distributed.all_reduce(
+                logical_count_of_buffered_step, op=torch.distributed.ReduceOp.SUM
+            )
 
         output = dict(
             rank=self._rank,
             logical_count=logical_count_of_buffered_step,
             average_utilization_rate_over_window=self._get_global_average_utilization_rate(),
         )
+        if _placement_requires_rank_counts():
+            output["logical_count_layout"] = "rank_layer_expert"
 
         if output_mode == "file":
             if self._rank == 0:

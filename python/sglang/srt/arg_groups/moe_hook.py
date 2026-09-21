@@ -52,6 +52,42 @@ def handle_moe_load_balancer(server_args: Any):
                 "--moe-load-balancer-algorithm cannot be combined with --ep-dispatch-algorithm or --enable-waterfill"
             )
         resolutions = {"moe_load_balancer_algorithm": pipeline.name}
+        if pipeline.placement_policy is not None:
+            from moe_load_balancer import ExpertDeploymentConfig
+
+            reason = pipeline.is_applicable(
+                ExpertDeploymentConfig(
+                    num_redundant_experts=cfg.ep_num_redundant_experts,
+                    routes_shared_expert=True,
+                    carries_placement_metadata=True,
+                )
+            )
+            if reason is not None:
+                raise ValueError(reason)
+            if cfg.ep_size <= 1 or cfg.ep_num_redundant_experts % cfg.ep_size:
+                raise ValueError(
+                    "Coupled MLB placement requires redundant slots on every EP rank."
+                )
+            if cfg.elastic_ep_backend is not None or cfg.pp_size != 1:
+                raise ValueError(
+                    "Coupled MLB placement requires a fixed EP group and PP=1."
+                )
+            if not cfg.enable_eplb and cfg.init_expert_location == "trivial":
+                raise ValueError(
+                    "Coupled MLB routing requires --enable-eplb or recorded placement statistics."
+                )
+            if cfg.enable_eplb and not cfg.disable_cuda_graph:
+                raise ValueError(
+                    "Online coupled MLB placement currently requires --disable-cuda-graph."
+                )
+            if cfg.enable_two_batch_overlap or cfg.enable_single_batch_overlap:
+                raise ValueError(
+                    "Coupled MLB placement does not support overlapping microbatches."
+                )
+            if cfg.expert_distribution_recorder_mode not in (None, "stat"):
+                raise ValueError(
+                    "Coupled MLB placement requires the stat expert recorder."
+                )
         if (
             pipeline.capabilities.requires_post_topk_routing
             and not pipeline.capabilities.routes_shared_expert

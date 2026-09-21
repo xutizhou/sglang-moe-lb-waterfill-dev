@@ -166,7 +166,9 @@ class TestMLBRuntimeContext(unittest.TestCase):
         counts = torch.tensor([[[10, 20]]])
         mapping = torch.tensor([[0, 1, 0, 1]])
         maps = SimpleNamespace(
-            physical_to_logical_map=mapping, logical_to_all_physical_map=mapping
+            physical_to_logical_map=mapping,
+            logical_to_all_physical_map=mapping,
+            routing_metadata={0: {"rank_quota_prefix": torch.tensor([[1, 2]])}},
         )
         request = object()
         layout = dict(
@@ -204,6 +206,9 @@ class TestMLBRuntimeContext(unittest.TestCase):
         adapt_result.assert_called_once_with(mlb.plan_placement.return_value)
         self.assertIs(result, initialize.return_value)
         self.assertIs(initialize.call_args.kwargs["physical_to_logical_map"], mapping)
+        self.assertIs(
+            initialize.call_args.kwargs["mlb_routing_metadata"], maps.routing_metadata
+        )
 
     @unittest.skipUnless(
         importlib.util.find_spec("moe_load_balancer"),
