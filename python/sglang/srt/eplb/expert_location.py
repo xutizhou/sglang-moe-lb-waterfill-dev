@@ -557,6 +557,34 @@ def append_trivial_expert_slots(
     return torch.cat([physical_to_logical_map, new_slots % num_logical_experts], dim=1)
 
 
+def _build_rank_local_initial_physical_to_logical_map(
+    *,
+    num_layers: int,
+    num_logical_experts: int,
+    ep_size: int,
+    num_redundant_experts_per_rank: int,
+) -> torch.Tensor:
+    """Place fixed master experts before rank-local redundant slots."""
+
+    if num_layers <= 0:
+        raise ValueError("Coupled placement requires at least one MoE layer.")
+    if ep_size <= 1 or num_logical_experts % ep_size != 0:
+        raise ValueError("Coupled placement requires divisible experts and ep_size > 1.")
+    if num_redundant_experts_per_rank <= 0:
+        raise ValueError("Coupled placement requires a redundant slot on every EP rank.")
+
+    num_local_master_experts = num_logical_experts // ep_size
+    masters = torch.arange(num_logical_experts, dtype=torch.int32).reshape(
+        ep_size, num_local_master_experts
+    )
+    redundant = masters[
+        :,
+        torch.arange(num_redundant_experts_per_rank) % num_local_master_experts,
+    ]
+    rank_local_layout = torch.cat((masters, redundant), dim=1).reshape(1, -1)
+    return rank_local_layout.repeat(num_layers, 1)
+
+
 def broadcast_global_expert_location_metadata(
     model_config: ModelConfig,
     moe_ep_rank: int,
@@ -828,7 +856,7 @@ def compute_initial_expert_location_metadata(
             if common is None:
                 return None
             model_info = common["model_config_for_expert_location"]
-            mapping = moe_load_balancer.build_initial_physical_to_logical_map(
+            mapping = _build_rank_local_initial_physical_to_logical_map(
                 num_layers=model_info.num_layers,
                 num_logical_experts=model_info.num_logical_experts,
                 ep_size=common["ep_size"],
