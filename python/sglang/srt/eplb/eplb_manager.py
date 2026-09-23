@@ -63,7 +63,7 @@ class EPLBManager:
         self._refresh_gate = None
         self._forward_batch = None
         if self.refreshes_per_layer:
-            from moe_load_balancer.core.refresh_gate import RefreshGate
+            from moe_load_balancer.policies.l1 import RefreshGate
 
             self._refresh_gate = RefreshGate(self._rebalance_num_iterations)
 
@@ -146,7 +146,6 @@ class EPLBManager:
         request = to_placement_request(
             per_rank_count[:, None, :],
             context=get_context(),
-            window_aggregated=False,
         )
         maps = to_sglang_maps(self._moe_load_balancer.plan_placement(request))
         metadata = ExpertLocationMetadata._init_raw(

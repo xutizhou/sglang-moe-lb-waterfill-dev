@@ -72,21 +72,19 @@ def handle_moe_load_balancer(server_args: Any):
                 raise ValueError(
                     "Coupled MLB placement requires a fixed EP group and PP=1."
                 )
-            if not cfg.enable_eplb and cfg.init_expert_location == "trivial":
+            if not cfg.enable_eplb:
+                raise ValueError("Coupled MLB routing requires --enable-eplb.")
+            if cfg.init_expert_location != "trivial":
                 raise ValueError(
-                    "Coupled MLB routing requires --enable-eplb or recorded placement statistics."
+                    "Coupled MLB routing currently requires --init-expert-location trivial."
                 )
-            if cfg.enable_eplb and not cfg.disable_cuda_graph:
+            if not cfg.disable_cuda_graph:
                 raise ValueError(
                     "Online coupled MLB placement currently requires --disable-cuda-graph."
                 )
             if cfg.enable_two_batch_overlap or cfg.enable_single_batch_overlap:
                 raise ValueError(
                     "Coupled MLB placement does not support overlapping microbatches."
-                )
-            if cfg.expert_distribution_recorder_mode not in (None, "stat"):
-                raise ValueError(
-                    "Coupled MLB placement requires the stat expert recorder."
                 )
         if (
             pipeline.capabilities.requires_post_topk_routing

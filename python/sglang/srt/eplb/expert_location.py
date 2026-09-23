@@ -820,25 +820,6 @@ def compute_initial_expert_location_metadata(
 ) -> Optional[ExpertLocationMetadata]:
     data = get_exec().moe.init_expert_location
     if data == "trivial":
-        if (
-            moe_load_balancer is not None
-            and moe_load_balancer.placement_policy is not None
-        ):
-            common = ExpertLocationMetadata._init_common(model_config)
-            if common is None:
-                return None
-            model_info = common["model_config_for_expert_location"]
-            mapping = moe_load_balancer.build_initial_physical_to_logical_map(
-                num_layers=model_info.num_layers,
-                num_logical_experts=model_info.num_logical_experts,
-                ep_size=common["ep_size"],
-                num_redundant_experts_per_rank=(
-                    get_exec().moe.ep_num_redundant_experts // common["ep_size"]
-                ),
-            )
-            return ExpertLocationMetadata.init_by_mapping(
-                model_config, mapping, moe_ep_rank=moe_ep_rank
-            )
         return ExpertLocationMetadata.init_trivial(model_config, moe_ep_rank)
 
     # TODO unify with the utils function
@@ -850,14 +831,6 @@ def compute_initial_expert_location_metadata(
         data_dict = json.loads(data)
 
     if "physical_to_logical_map" in data_dict:
-        if (
-            moe_load_balancer is not None
-            and moe_load_balancer.placement_policy is not None
-        ):
-            raise ValueError(
-                "Coupled MLB routing requires per-rank logical_count statistics, "
-                "not a physical mapping without routing metadata."
-            )
         logger.info(
             "init_expert_location from init_by_mapping using ServerArgs.init_expert_location"
         )
@@ -867,15 +840,6 @@ def compute_initial_expert_location_metadata(
             moe_ep_rank=moe_ep_rank,
         )
     elif "logical_count" in data_dict:
-        if (
-            moe_load_balancer is not None
-            and moe_load_balancer.routing_capabilities.placement_requires_rank_counts
-            and data_dict.get("logical_count_layout") != "rank_layer_expert"
-        ):
-            raise ValueError(
-                "This MLB placement policy requires statistics recorded per source EP rank. "
-                "The recording must declare logical_count_layout='rank_layer_expert'."
-            )
         logger.info(
             "init_expert_location from init_by_eplb using ServerArgs.init_expert_location"
         )

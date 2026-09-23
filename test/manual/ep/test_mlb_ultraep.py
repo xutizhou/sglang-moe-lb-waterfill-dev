@@ -17,7 +17,6 @@ from moe_load_balancer.adapters.sglang import (
     to_routing_request,
     to_sglang_maps,
 )
-
 from sglang.srt.eplb.expert_location import ExpertLocationMetadata
 from sglang.srt.eplb.expert_location_updater import ExpertLocationUpdater
 from sglang.srt.runtime_context import get_context
@@ -47,12 +46,10 @@ def main():
     mlb = MoELoadBalancer.from_algorithm(
         "ultraep", ep_size=2, source_rank=rank, experts_per_rank=5
     )
-    mapping = mlb.build_initial_physical_to_logical_map(
-        num_layers=2,
-        num_logical_experts=8,
-        ep_size=2,
-        num_redundant_experts_per_rank=1,
-        device="cuda",
+    # Match SGLang's normal trivial bootstrap. The first current-batch solve
+    # moves this layout to UltraEP's fixed-master layout before dispatch.
+    mapping = (
+        torch.arange(10, dtype=torch.int32, device="cuda").remainder(8).repeat(2, 1)
     )
     with context.override_server_args(
         device="cuda",
@@ -142,13 +139,8 @@ def main():
                         quota = snapshot.metadata["rank_quota_prefix"][hot]
                         replicas = int(snapshot.logical_to_physical_count[hot])
                         quota = quota[:replicas].long()
-                        total = int(quota[-1])
-                        if total > 0:
-                            boundaries = torch.div(
-                                quota * valid.sum() + total - 1,
-                                total,
-                                rounding_mode="floor",
-                            )
+                        if int(quota[-1]) > 0:
+                            boundaries = quota.clamp_max(valid.sum())
                             expected_counts = boundaries.diff(
                                 prepend=boundaries.new_zeros(1)
                             )
@@ -171,8 +163,7 @@ def main():
 
 
 def check_current_batch_refresh(mlb, live, weights, updater, rank):
-    from moe_load_balancer.core.refresh_gate import RefreshGate
-
+    from moe_load_balancer.policies.l1 import RefreshGate
     from sglang.srt.eplb.eplb_manager import EPLBManager
 
     manager = object.__new__(EPLBManager)
@@ -212,7 +203,6 @@ def check_current_batch_refresh(mlb, live, weights, updater, rank):
                 ids[::3, 1] = -1
                 manager.refresh_layer(layer, ids, None)
                 snapshot = to_placement_snapshot(live, layer)
-                assert snapshot.metadata["normalize_quota"] is False
                 expected = live.physical_to_logical_map[
                     layer, rank * 5 : (rank + 1) * 5
                 ]
