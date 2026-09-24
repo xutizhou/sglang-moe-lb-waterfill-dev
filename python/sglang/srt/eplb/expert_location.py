@@ -897,7 +897,9 @@ def compute_initial_expert_location_metadata(
     elif "logical_count" in data_dict:
         if (
             moe_load_balancer is not None
-            and moe_load_balancer.routing_capabilities.placement_requires_rank_counts
+            # TODO: Validate this layout through MLB placement capabilities
+            # instead of recognizing the UltraEP placement policy in SGLang.
+            and moe_load_balancer.placement_policy == "ultraep"
             and data_dict.get("logical_count_layout") != "rank_layer_expert"
         ):
             raise ValueError(

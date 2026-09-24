@@ -56,6 +56,8 @@ class EPLBManager:
         self._rebalance_num_iterations = get_exec().moe.eplb_rebalance_num_iterations
         self._rebalance_disabled_reason = None
         self._rebalance_disabled_logged = False
+        # TODO: Select the refresh cadence through MLB placement capabilities
+        # instead of recognizing the UltraEP placement policy in SGLang.
         self.refreshes_per_layer = (
             moe_load_balancer is not None
             and moe_load_balancer.placement_policy == "ultraep"

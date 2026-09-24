@@ -939,7 +939,9 @@ def _placement_requires_rank_counts() -> bool:
     pipeline = get_moe_load_balancer_pipeline(
         get_exec().moe.moe_load_balancer_algorithm
     )
-    return pipeline is not None and pipeline.capabilities.placement_requires_rank_counts
+    # TODO: Read the logical-count layout from MLB placement capabilities
+    # instead of recognizing the UltraEP placement policy in SGLang.
+    return pipeline is not None and pipeline.placement_policy == "ultraep"
 
 
 class _StatAccumulator(_UtilizationRateAccumulatorMixin):
