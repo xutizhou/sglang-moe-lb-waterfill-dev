@@ -47,11 +47,9 @@ def main():
     mlb = MoELoadBalancer.from_algorithm(
         "ultraep", ep_size=2, source_rank=rank, experts_per_rank=5
     )
-    mapping = mlb.build_initial_physical_to_logical_map(
-        num_layers=2,
-        num_logical_experts=8,
-        ep_size=2,
-        num_redundant_experts_per_rank=1,
+    mapping = torch.tensor(
+        [[0, 1, 2, 3, 0, 4, 5, 6, 7, 4]] * 2,
+        dtype=torch.int32,
         device="cuda",
     )
     with context.override_server_args(
@@ -139,26 +137,11 @@ def main():
                             live.physical_to_logical_map[layer][routed[valid]],
                             ids[valid].int(),
                         )
-                        quota = snapshot.metadata["rank_quota_prefix"][hot]
                         replicas = int(snapshot.logical_to_physical_count[hot])
-                        quota = quota[:replicas].long()
-                        total = int(quota[-1])
-                        if total > 0:
-                            boundaries = torch.div(
-                                quota * valid.sum() + total - 1,
-                                total,
-                                rounding_mode="floor",
-                            )
-                            expected_counts = boundaries.diff(
-                                prepend=boundaries.new_zeros(1)
-                            )
-                            candidates = snapshot.logical_to_physical_candidates[
-                                hot, :replicas
-                            ]
-                            actual_counts = (
-                                routed[valid, None] == candidates[None, :]
-                            ).sum(0)
-                            torch.testing.assert_close(actual_counts, expected_counts)
+                        candidates = snapshot.logical_to_physical_candidates[
+                            hot, :replicas
+                        ]
+                        assert torch.isin(routed[valid], candidates).all()
                         cases += 1
                 dist.barrier()
             cases += check_current_batch_refresh(mlb, live, weights, updater, rank)
@@ -171,7 +154,7 @@ def main():
 
 
 def check_current_batch_refresh(mlb, live, weights, updater, rank):
-    from moe_load_balancer.core.refresh_gate import RefreshGate
+    from moe_load_balancer.policies.l1 import RefreshGate
 
     from sglang.srt.eplb.eplb_manager import EPLBManager
 
@@ -212,7 +195,6 @@ def check_current_batch_refresh(mlb, live, weights, updater, rank):
                 ids[::3, 1] = -1
                 manager.refresh_layer(layer, ids, None)
                 snapshot = to_placement_snapshot(live, layer)
-                assert snapshot.metadata["normalize_quota"] is False
                 expected = live.physical_to_logical_map[
                     layer, rank * 5 : (rank + 1) * 5
                 ]
@@ -239,6 +221,12 @@ def check_current_batch_refresh(mlb, live, weights, updater, rank):
                 assert torch.equal(
                     live.physical_to_logical_map[layer][routed[valid]], ids[valid].int()
                 )
+                replicas = int(snapshot.logical_to_physical_count[hot])
+                candidates = snapshot.logical_to_physical_candidates[hot, :replicas]
+                quota = snapshot.metadata["rank_quota_prefix"][hot, :replicas].long()
+                expected_counts = quota.diff(prepend=quota.new_zeros(1))
+                actual_counts = (routed[valid, None] == candidates[None, :]).sum(0)
+                torch.testing.assert_close(actual_counts, expected_counts)
                 cases += 1
             # A decode-only DP batch can leave a peer idle. Neither rank may
             # advance the refresh gate or enter its placement collective.

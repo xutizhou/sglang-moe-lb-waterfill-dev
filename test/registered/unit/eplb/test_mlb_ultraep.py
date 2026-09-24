@@ -119,7 +119,7 @@ def test_topk_refresh_precedes_quota_route_even_for_empty_batch(hashed):
 
 @pytest.mark.parametrize("empty", [False, True])
 def test_current_batch_refresh_includes_idle_rank_and_commits_before_routing(empty):
-    from moe_load_balancer.core.refresh_gate import RefreshGate
+    from moe_load_balancer.policies.l1 import RefreshGate
 
     from sglang.srt.eplb.eplb_manager import EPLBManager
 
@@ -137,7 +137,8 @@ def test_current_batch_refresh_includes_idle_rank_and_commits_before_routing(emp
     )
 
     def solve(request):
-        assert request.stats.metadata["window_aggregated"] is False
+        assert request.stats.metadata == {}
+        assert request.policy.metadata == {"rank": 0, "num_nvl_ranks": 2}
         torch.testing.assert_close(
             request.stats.logical_count[:, 0],
             torch.tensor([[0, 0] if empty else [2, 1], [4, 2]], dtype=torch.int32),
