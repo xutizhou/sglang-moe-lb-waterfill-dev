@@ -746,6 +746,23 @@ class ModelRunner:
                 raise RuntimeError(
                     "MLB routing requires every MoE TopK to have layer_id."
                 )
+            if (
+                self.moe_load_balancer.routing_capabilities.routes_shared_expert
+                and not getattr(module, "mlb_routes_shared_expert", False)
+            ):
+                # The shared-expert policy materialises the shared expert as one extra
+                # TopK entry in DeepEP's per-rank shared-slot layout. A TopK built with
+                # num_fused_shared_experts == 0 (model has no shared expert, or its
+                # fusion was disabled by the model's gate) has no such slot: the ids
+                # would be re-interleaved onto the wrong experts and the output is
+                # silently garbage (verified on Qwen3.5-35B, 2026-09-27).
+                raise RuntimeError(
+                    "MLB shared-expert routing (waterfill) requires every MoE TopK to "
+                    f"carry a fused shared-expert slot, but layer {module.layer_id} was "
+                    "built with num_fused_shared_experts=0 (no shared expert, or "
+                    "shared-experts fusion disabled for this model/backend). Drop "
+                    "'waterfill' from --moe-load-balancer-algorithm for this model."
+                )
             module.moe_load_balancer = self.moe_load_balancer
             if self.eplb_manager is not None and self.eplb_manager.refreshes_per_layer:
                 module.mlb_placement_refresh = self.eplb_manager.refresh_layer

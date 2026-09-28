@@ -222,6 +222,7 @@ class TestMLBRuntimeContext(unittest.TestCase):
         topk = Mock(spec=TopK, layer_id=2)
         hash_topk = Mock(spec=HashTopK, layer_id=3)
         mlb = Mock()
+        mlb.routing_capabilities.routes_shared_expert = False
         runner = SimpleNamespace(
             moe_load_balancer=mlb,
             eplb_manager=Mock(refreshes_per_layer=True),
@@ -243,6 +244,39 @@ class TestMLBRuntimeContext(unittest.TestCase):
             hash_topk.mlb_placement_refresh, runner.eplb_manager.refresh_layer
         )
         commit.assert_called_once_with(mlb, context, [2, 3])
+
+    def test_shared_expert_routing_requires_fused_shared_slot_on_every_topk(self):
+        """waterfill materialises the shared expert into DeepEP's per-rank slot;
+        a TopK built without one would silently corrupt the routed ids."""
+        from sglang.srt.layers.moe.topk import TopK
+        from sglang.srt.model_executor.model_runner import ModelRunner
+
+        fused = Mock(spec=TopK, layer_id=1, mlb_routes_shared_expert=True)
+        unfused = Mock(spec=TopK, layer_id=2, mlb_routes_shared_expert=False)
+        mlb = Mock()
+        mlb.routing_capabilities.requires_post_topk_routing = True
+        mlb.routing_capabilities.routes_shared_expert = True
+        runner = SimpleNamespace(
+            moe_load_balancer=mlb,
+            eplb_manager=None,
+            model=SimpleNamespace(modules=lambda: [fused, unfused]),
+        )
+        with (
+            patch("sglang.srt.model_executor.model_runner.get_context"),
+            patch("moe_load_balancer.adapters.sglang.commit_placement") as commit,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "fused shared-expert slot"):
+                ModelRunner._prepare_moe_topk(runner)
+        commit.assert_not_called()
+
+        # A replica-only pipeline (no shared-expert policy) does not need the slot.
+        mlb.routing_capabilities.routes_shared_expert = False
+        with (
+            patch("sglang.srt.model_executor.model_runner.get_context"),
+            patch("moe_load_balancer.adapters.sglang.commit_placement") as commit,
+        ):
+            ModelRunner._prepare_moe_topk(runner)
+        commit.assert_called_once()
 
     @unittest.skipUnless(
         importlib.util.find_spec("moe_load_balancer"),
