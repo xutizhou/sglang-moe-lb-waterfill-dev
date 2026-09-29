@@ -315,6 +315,25 @@ def handle_a2a_moe(server_args: Any):
     a2a_backend = resolved_view(server_args).moe_a2a_backend
     from sglang.srt.eplb.moe_load_balancer_glue import get_moe_load_balancer_pipeline
 
+    if (
+        a2a_backend == "none"
+        and cfg.ep_size > 1
+        and cfg.ep_num_redundant_experts > 0
+    ):
+        # Without a token-owning all-to-all dispatcher every EP rank re-runs TopK on
+        # the same (gathered / replicated) batch. Replica selection is rank-dependent
+        # (static dispatch prefers the local replica; dynamic / LPLB draw per rank), so
+        # a token routed to a replicated logical expert is computed by several ranks
+        # and summed several times -- the output is silently corrupted (verified on
+        # GLM-4.7-Flash, 2026-09-26). Redundancy-free placement (pure permutation)
+        # stays valid because the logical->physical map is then a bijection.
+        raise ValueError(
+            "--ep-num-redundant-experts > 0 requires a token-owning MoE all-to-all "
+            "backend (e.g. --moe-a2a-backend deepep); with --moe-a2a-backend none "
+            "rank-dependent replica routing double-computes experts and corrupts "
+            "outputs. Use --ep-num-redundant-experts 0 or switch the a2a backend."
+        )
+
     pipeline = get_moe_load_balancer_pipeline(cfg.moe_load_balancer_algorithm)
     if cfg.enable_waterfill or (
         pipeline is not None and pipeline.capabilities.routes_shared_expert

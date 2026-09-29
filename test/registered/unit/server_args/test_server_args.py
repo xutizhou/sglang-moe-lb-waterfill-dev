@@ -1744,6 +1744,42 @@ class TestFlashinferMegaMoeConfig(CustomTestCase):
                     handle_a2a_moe(self._make_args())
 
 
+class TestRedundantExpertsNeedTokenOwningA2A(unittest.TestCase):
+    """--moe-a2a-backend none replicates the batch on every EP rank, so redundant
+    experts (rank-dependent replica choice) double-compute and corrupt outputs."""
+
+    def test_a2a_none_with_redundant_experts_is_rejected(self):
+        server_args = ServerArgs(
+            model_path="dummy",
+            tp_size=8,
+            ep_size=8,
+            moe_a2a_backend="none",
+            ep_num_redundant_experts=32,
+        )
+        with self.assertRaisesRegex(ValueError, "token-owning MoE all-to-all"):
+            handle_a2a_moe(server_args)
+
+    def test_a2a_none_without_redundancy_is_allowed(self):
+        server_args = ServerArgs(
+            model_path="dummy",
+            tp_size=8,
+            ep_size=8,
+            moe_a2a_backend="none",
+            ep_num_redundant_experts=0,
+        )
+        handle_a2a_moe(server_args)
+
+    def test_deepep_with_redundant_experts_is_allowed(self):
+        server_args = ServerArgs(
+            model_path="dummy",
+            tp_size=8,
+            ep_size=8,
+            moe_a2a_backend="deepep",
+            ep_num_redundant_experts=32,
+        )
+        handle_a2a_moe(server_args)
+
+
 class TestMoELoadBalancerAlgorithm(unittest.TestCase):
     def test_one_parameter_selects_composed_pipeline(self):
         server_args = ServerArgs(
