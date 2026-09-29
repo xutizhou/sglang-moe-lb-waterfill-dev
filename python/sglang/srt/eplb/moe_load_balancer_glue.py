@@ -38,6 +38,11 @@ def route_topk_with_mlb(
     from sglang.srt.layers.moe.topk import StandardTopKOutput
 
     context = get_context()
+    refresh = context.resources.mlb_placement_refresh
+    if refresh is not None:
+        # Coupled placement re-plans this layer from the current batch and
+        # commits it before routing reads the placement.
+        refresh(layer_id, topk_output.topk_ids, forward_batch)
     request = to_routing_request(
         context=context,
         layer_id=layer_id,

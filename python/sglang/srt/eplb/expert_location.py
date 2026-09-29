@@ -18,6 +18,7 @@ import json
 import logging
 import random
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterable, List, Optional
 
@@ -69,6 +70,9 @@ class ExpertLocationMetadata:
     ep_size: int
     # (layers, num_logical_experts)
     logical_to_rank_dispatch_physical_map: Optional[torch.Tensor]
+    # layer_id -> per-layer state an MLB placement plan publishes for its
+    # routing half (carried into PlacementSnapshot.metadata; see adapters.sglang).
+    mlb_routing_metadata: dict = dataclass_field(default_factory=dict)
 
     # -------------------------------- properties ------------------------------------
 
@@ -197,6 +201,7 @@ class ExpertLocationMetadata:
         num_groups = model_config_for_expert_location.num_groups
         num_nodes = 1 if use_flat_topology else get_parallel().nnodes
 
+        mlb_routing_metadata = None
         if moe_load_balancer is None:
             from sglang.srt.eplb import eplb_algorithms
 
@@ -237,6 +242,7 @@ class ExpertLocationMetadata:
             maps = to_sglang_maps(plan)
             physical_to_logical_map = maps.physical_to_logical_map
             logical_to_all_physical_map = maps.logical_to_all_physical_map
+            mlb_routing_metadata = maps.routing_metadata
 
         return ExpertLocationMetadata._init_raw(
             ep_size=common["ep_size"],
@@ -244,6 +250,7 @@ class ExpertLocationMetadata:
             logical_to_all_physical_map=logical_to_all_physical_map.to(
                 get_device().device
             ),
+            mlb_routing_metadata=mlb_routing_metadata,
         )
 
     @staticmethod
@@ -294,6 +301,7 @@ class ExpertLocationMetadata:
         physical_to_logical_map: torch.Tensor,
         logical_to_all_physical_map: torch.Tensor,
         moe_ep_rank: Optional[int] = None,
+        mlb_routing_metadata: Optional[dict] = None,
     ):
 
         _, num_physical_experts = physical_to_logical_map.shape
@@ -330,6 +338,7 @@ class ExpertLocationMetadata:
                 or _mlb_requires_dispatch_map()
                 else None
             ),
+            mlb_routing_metadata=mlb_routing_metadata or {},
         )
 
     # -------------------------------- mutation ------------------------------------
@@ -356,12 +365,25 @@ class ExpertLocationMetadata:
             self_field = getattr(self, field)
             assert (other_field is not None) == (self_field is not None)
             if self_field is not None:
+                if other.num_layers == 1:
+                    # A one-layer plan (per-layer refresh): copy rows, do not
+                    # rebuild every layer's tensors on each refresh.
+                    for layer_id in update_layer_ids:
+                        self_field[layer_id].copy_(other_field[0])
+                    continue
                 mask_update = torch.tensor(
                     [i in update_layer_ids for i in range(self.num_layers)]
                 )
                 mask_update = mask_update.view(*([-1] + [1] * (self_field.dim() - 1)))
                 mask_update = mask_update.to(self_field.device, non_blocking=True)
                 self_field[...] = torch.where(mask_update, other_field, self_field)
+        for layer_id in update_layer_ids:
+            if layer_id in other.mlb_routing_metadata:
+                self.mlb_routing_metadata[layer_id] = other.mlb_routing_metadata[
+                    layer_id
+                ]
+            else:
+                self.mlb_routing_metadata.pop(layer_id, None)
 
     # -------------------------------- usage ------------------------------------
 
@@ -794,7 +816,12 @@ def compute_initial_expert_location_metadata(
     moe_load_balancer=None,
 ) -> Optional[ExpertLocationMetadata]:
     data = get_exec().moe.init_expert_location
+    coupled = (
+        moe_load_balancer is not None and moe_load_balancer.placement_policy is not None
+    )
     if data == "trivial":
+        if coupled:
+            return _init_coupled_bootstrap(model_config, moe_ep_rank)
         return ExpertLocationMetadata.init_trivial(model_config, moe_ep_rank)
 
     # TODO unify with the utils function
@@ -806,6 +833,11 @@ def compute_initial_expert_location_metadata(
         data_dict = json.loads(data)
 
     if "physical_to_logical_map" in data_dict:
+        if coupled:
+            raise ValueError(
+                "Coupled MLB placement plans from logical_count statistics; "
+                "a physical_to_logical_map carries no routing metadata."
+            )
         logger.info(
             "init_expert_location from init_by_mapping using ServerArgs.init_expert_location"
         )
@@ -815,6 +847,12 @@ def compute_initial_expert_location_metadata(
             moe_ep_rank=moe_ep_rank,
         )
     elif "logical_count" in data_dict:
+        if coupled and data_dict.get("logical_count_layout") != "rank_layer_expert":
+            raise ValueError(
+                "Coupled MLB placement needs statistics recorded per source EP rank "
+                "(logical_count_layout='rank_layer_expert'); record them with the "
+                "same --moe-load-balancer-algorithm."
+            )
         logger.info(
             "init_expert_location from init_by_eplb using ServerArgs.init_expert_location"
         )
@@ -827,6 +865,33 @@ def compute_initial_expert_location_metadata(
         raise NotImplementedError(
             f"Unknown init_expert_location format ({list(data_dict.keys())=})"
         )
+
+
+def _init_coupled_bootstrap(model_config: ModelConfig, moe_ep_rank: int):
+    """Bootstrap layout for a coupled placement policy: every rank holds its
+    fixed master experts followed by its own redundant slots, which the policy
+    then re-plans online from live traffic."""
+    common = ExpertLocationMetadata._init_common(model_config)
+    if common is None:
+        return None
+    model_info = common["model_config_for_expert_location"]
+    ep_size = common["ep_size"]
+    num_logical_experts = model_info.num_logical_experts
+    num_redundant_per_rank = get_exec().moe.ep_num_redundant_experts // ep_size
+    if ep_size <= 1 or num_logical_experts % ep_size != 0:
+        raise ValueError(
+            "Coupled MLB placement requires ep_size > 1 dividing the expert count."
+        )
+    if num_redundant_per_rank <= 0:
+        raise ValueError(
+            "Coupled MLB placement requires a redundant slot on every rank."
+        )
+    masters = torch.arange(num_logical_experts, dtype=torch.int32).reshape(ep_size, -1)
+    redundant = masters[:, torch.arange(num_redundant_per_rank) % masters.shape[1]]
+    layout = torch.cat((masters, redundant), dim=1).reshape(1, -1)
+    return ExpertLocationMetadata.init_by_mapping(
+        model_config, layout.repeat(model_info.num_layers, 1), moe_ep_rank=moe_ep_rank
+    )
 
 
 def _mlb_requires_dispatch_map():

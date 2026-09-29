@@ -56,6 +56,20 @@ class EPLBManager:
         self._rebalance_num_iterations = get_exec().moe.eplb_rebalance_num_iterations
         self._rebalance_disabled_reason = None
         self._rebalance_disabled_logged = False
+        # A coupled placement policy (the L2 expression names its L1 half, e.g.
+        # ultraep) re-plans each layer from the batch it is about to route,
+        # every `eplb_rebalance_num_iterations` representative batches, instead
+        # of the periodic whole-model rebalance below.
+        self.refreshes_per_layer = (
+            moe_load_balancer is not None
+            and moe_load_balancer.placement_policy is not None
+        )
+        self._refresh_gate = None
+        self._forward_batch = None
+        if self.refreshes_per_layer:
+            from moe_load_balancer.policies.l1 import RefreshGate
+
+            self._refresh_gate = RefreshGate(self._rebalance_num_iterations)
 
         # Otherwise, the circular buffer will contain stale data. If the case is needed, it can be implemented.
         assert (
@@ -74,8 +88,85 @@ class EPLBManager:
 
         self._main_generator = self._entrypoint()
 
+    def on_forward_pass_start(self, forward_batch):
+        self._forward_batch = forward_batch
+
     def on_forward_pass_end(self):
-        next(self._main_generator)
+        self._forward_batch = None
+        if not self.refreshes_per_layer:
+            next(self._main_generator)
+
+    def refresh_layer(self, layer_id, logical_topk_ids, forward_batch=None):
+        """Re-plan one layer from its current TopK and commit weights + placement
+        before that layer dispatches. Every EP rank must take the same branch:
+        the gate, the gather and the weight move are collectives."""
+        if forward_batch is None:
+            # Model code that calls TopK without the batch; the runner saw it.
+            forward_batch = self._forward_batch
+        if (
+            forward_batch is None
+            or self._rebalance_disabled_reason is not None
+            or torch.cuda.is_current_stream_capturing()
+        ):
+            return
+        mode = forward_batch.global_forward_mode or forward_batch.forward_mode
+        # Decode-only passes (idle DP ranks included) do not count as batches.
+        if (
+            mode.is_decode() or mode.is_idle()
+        ) and not forward_batch.is_extend_in_batch:
+            return
+        if not self._refresh_gate.is_due(layer_id):
+            return
+        counts = forward_batch.original_global_num_tokens_cpu
+        if counts is None:
+            counts = forward_batch.global_num_tokens_cpu
+        num_tokens = (
+            sum(counts)
+            if counts is not None
+            else forward_batch.global_num_token_non_padded_cpu
+        )
+        if not self._refresh_gate.should_refresh(
+            layer_id, representative=num_tokens >= 512
+        ):
+            return
+
+        from moe_load_balancer.adapters.sglang import (
+            commit_placement,
+            to_placement_request,
+            to_sglang_maps,
+        )
+        from moe_load_balancer.kernels.ops.counting import count_logical_experts
+
+        live = get_global_expert_location_metadata()
+        local_count = count_logical_experts(
+            logical_topk_ids, live.num_logical_experts, dtype=torch.int32
+        )
+        per_rank_count = local_count.new_empty((live.ep_size, live.num_logical_experts))
+        dist.all_gather_into_tensor(
+            per_rank_count,
+            local_count.contiguous(),
+            group=get_parallel().moe_ep_group.device_group,
+        )
+        plan = self._moe_load_balancer.plan_placement(
+            to_placement_request(per_rank_count[:, None, :], context=get_context())
+        )
+        maps = to_sglang_maps(plan)
+        layer_metadata = ExpertLocationMetadata._init_raw(
+            ep_size=live.ep_size,
+            physical_to_logical_map=maps.physical_to_logical_map,
+            logical_to_all_physical_map=maps.logical_to_all_physical_map,
+            mlb_routing_metadata={
+                layer_id: value for value in maps.routing_metadata.values()
+            },
+        )
+        self._get_expert_location_updater().update_layer(
+            self._get_model().routed_experts_weights_of_layer[layer_id],
+            layer_metadata,
+            layer_id,
+            nnodes=get_parallel().nnodes,
+            rank=self._ps.tp_rank,
+        )
+        commit_placement(self._moe_load_balancer, get_context(), [layer_id])
 
     def reset_generator(self):
         self._main_generator = self._entrypoint()
