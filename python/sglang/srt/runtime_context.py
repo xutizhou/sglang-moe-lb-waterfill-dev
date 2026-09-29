@@ -780,6 +780,9 @@ class Resources(_FlagGroupBase):
     expert_location_metadata: Any = None
     # Model expert counts published by ModelRunner before MLB construction.
     mlb_model_info: dict[str, int | None] | None = None
+    # Coupled MLB placement: EPLBManager.refresh_layer, run by the routing glue
+    # ahead of each layer's dispatch. None unless placement refreshes per layer.
+    mlb_placement_refresh: Any = None
     # LPLB: layer_id -> solver.
     lplb_solvers: dict = msgspec.field(default_factory=dict)
     # Named side streams (see RuntimeContext.get_stream): name -> stream.

@@ -797,6 +797,10 @@ class ModelRunner:
             if get_exec().moe.enable_eplb and (not self.is_draft_worker)
             else None
         )
+        if self.eplb_manager is not None and self.eplb_manager.refreshes_per_layer:
+            get_context().resources.mlb_placement_refresh = (
+                self.eplb_manager.refresh_layer
+            )
 
     def maybe_init_elastic_ep(self):
         if get_exec().moe.elastic_ep_backend:
@@ -1790,6 +1794,8 @@ class ModelRunner:
                 forward_batch,
             ) as recorder_outputs,
         ):
+            if self.eplb_manager is not None:
+                self.eplb_manager.on_forward_pass_start(forward_batch)
             output = self._forward_raw(
                 forward_batch,
                 pp_proxy_tensors,
