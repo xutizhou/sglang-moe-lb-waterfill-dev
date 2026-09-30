@@ -318,7 +318,6 @@ POSITIONAL_FIELD_ORDER = (
     "deepep_dispatcher_output_dtype",
     "ep_num_redundant_experts",
     "moe_load_balancer_algorithm",
-    "ep_dispatch_algorithm",
     "init_expert_location",
     "enable_eplb",
     "eplb_algorithm",

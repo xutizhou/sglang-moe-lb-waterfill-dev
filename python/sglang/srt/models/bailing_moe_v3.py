@@ -25,7 +25,6 @@ from sglang.srt.distributed import (
 )
 from sglang.srt.environ import envs
 from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
-from sglang.srt.eplb.expert_location_dispatch import ExpertLocationDispatchInfo
 from sglang.srt.layers import deep_gemm_wrapper
 from sglang.srt.layers.activation import SiluAndMul
 from sglang.srt.layers.communicator import (
@@ -860,9 +859,6 @@ class BailingMoE(nn.Module):
                 router_logits,
                 dynamic_expert_bias=dynamic_expert_bias,
                 num_token_non_padded=forward_batch.num_token_non_padded,
-                expert_location_dispatch_info=ExpertLocationDispatchInfo.init_new(
-                    layer_id=self.layer_id,
-                ),
             )
         final_hidden_states = self.experts(hidden_states, topk_output)
 

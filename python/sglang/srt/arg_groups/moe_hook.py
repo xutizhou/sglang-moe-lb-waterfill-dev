@@ -37,20 +37,23 @@ def handle_moe_load_balancer(server_args: Any):
     from sglang.srt.eplb.moe_load_balancer_glue import get_moe_load_balancer_pipeline
 
     algorithm = cfg.moe_load_balancer_algorithm
-    if (
-        algorithm is None
-        and cfg.ep_dispatch_algorithm is None
-        and (cfg.enable_eplb or cfg.init_expert_location != "trivial")
+    if algorithm is None and (
+        cfg.enable_eplb
+        or cfg.init_expert_location != "trivial"
+        or cfg.ep_num_redundant_experts > 0
     ):
-        from moe_load_balancer import RoutingPipeline
+        # Expert placement needs a replica router. Without an a2a backend every
+        # EP rank runs the MoE over the same tokens and sums the partial
+        # outputs, so the pick must agree across ranks: `dynamic` draws from the
+        # token index; `static` reads a per-rank table.
+        if resolved_view(server_args).moe_a2a_backend == "none":
+            algorithm = "dynamic"
+        else:
+            from moe_load_balancer import RoutingPipeline
 
-        algorithm = RoutingPipeline.default_replica_routing().name
+            algorithm = RoutingPipeline.default_replica_routing().name
     pipeline = get_moe_load_balancer_pipeline(algorithm)
     if pipeline is not None:
-        if cfg.ep_dispatch_algorithm is not None:
-            raise ValueError(
-                "--moe-load-balancer-algorithm cannot be combined with --ep-dispatch-algorithm"
-            )
         resolutions = {"moe_load_balancer_algorithm": pipeline.name}
         if pipeline.placement_policy is not None:
             _check_coupled_placement(cfg, pipeline)

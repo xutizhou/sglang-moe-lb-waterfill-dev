@@ -551,7 +551,6 @@ export const config = {
         "--linear-attn-prefill-backend flashinfer",
         "--moe-runner-backend flashinfer_trtllm_routed",
         "--moe-a2a-backend flashinfer",
-        "--ep-dispatch-algorithm static",
         "--mamba-radix-cache-strategy extra_buffer",
         "--mamba-ssm-dtype bfloat16",
         "--mem-fraction-static 0.95",

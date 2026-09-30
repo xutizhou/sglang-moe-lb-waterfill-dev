@@ -32,7 +32,6 @@ from sglang.srt.distributed import (
     tensor_model_parallel_all_reduce,
 )
 from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
-from sglang.srt.eplb.expert_location_dispatch import ExpertLocationDispatchInfo
 from sglang.srt.layers.communicator import (
     LayerCommunicator,
     LayerScatterModes,
@@ -619,9 +618,6 @@ class MiniMaxM2MoE(nn.Module):
                 hidden_states,
                 router_logits,
                 num_token_non_padded=forward_batch.num_token_non_padded,
-                expert_location_dispatch_info=ExpertLocationDispatchInfo.init_new(
-                    layer_id=self.layer_id,
-                ),
             )
         else:
             topk_output = self.topk.empty_topk_output(device=hidden_states.device)
@@ -660,9 +656,6 @@ class MiniMaxM2MoE(nn.Module):
                     hidden_states=hidden_states,
                     router_logits=router_logits,
                     num_token_non_padded=state.forward_batch.num_token_non_padded,
-                    expert_location_dispatch_info=ExpertLocationDispatchInfo.init_new(
-                        layer_id=self.layer_id,
-                    ),
                 )
         else:
             state.topk_idx_local = torch.full(
