@@ -1272,7 +1272,7 @@ class DeepseekV2MoE(nn.Module):
             pre_quant_input = None
             shared_output = None
             topk_output = self.topk.empty_topk_output(
-                hidden_states.device, layer_id=self.layer_id
+                hidden_states.device
             )
 
         if self._fuse_shared_experts_inside_sbo and not skip_shared_experts:
@@ -1470,7 +1470,7 @@ class DeepseekV2MoE(nn.Module):
             )
         else:
             topk_output = self.topk.empty_topk_output(
-                hidden_states.device, layer_id=self.layer_id
+                hidden_states.device
             )
 
         if sbo_overlap_dispatch_flag:
@@ -1865,7 +1865,7 @@ class DeepseekV2MoE(nn.Module):
                 )
         else:
             state.topk_output = self.topk.empty_topk_output(
-                hidden_states.device, layer_id=self.layer_id
+                hidden_states.device
             )
 
     def op_dispatch_a(self, state):

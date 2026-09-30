@@ -34,7 +34,6 @@ _GROUPS = (
     "quantization",
     "sampling",
     "speculative",
-    "lplb",
     "kv_canary",
 )
 

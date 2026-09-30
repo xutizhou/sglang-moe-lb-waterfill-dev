@@ -63,10 +63,10 @@ _SHAPES = (
     {"disaggregation_mode": "prefill"},
     {"enable_lora": True, "max_lora_rank": 16},
     {"kv_cache_dtype": "fp8_e4m3", "page_size": 64},
-    # A pass and a handler both decide this one: waterfill forces `deepep`
+    # A pass and a handler both decide this one: MLB Waterfill forces `deepep`
     # and the ascend handler wants `none`. Without this shape nothing in
     # the set reaches a field two writers disagree about.
-    {"enable_waterfill": True, "moe_a2a_backend": "ascend_tp"},
+    {"moe_load_balancer_algorithm": "waterfill", "moe_a2a_backend": "ascend_tp"},
 )
 
 # Which converted fields the shapes above reach; the rest need a device or an
@@ -542,7 +542,7 @@ class TestResolutionDeclarations(CustomTestCase):
         registry entry that ran earlier -- where before, the pass's declaration
         was applied on top of the handler's bare write. One handler was found
         that way (it gated on the raw field while its neighbours read the
-        resolving view, so `--enable-waterfill --moe-a2a-backend ascend_tp`
+        resolving view, so `--moe-load-balancer-algorithm waterfill --moe-a2a-backend ascend_tp`
         silently stopped forcing `deepep`).
 
         This is the invariant rather than that instance: walk the stash in

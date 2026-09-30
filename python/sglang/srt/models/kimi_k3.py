@@ -895,10 +895,6 @@ class KimiK3MoE(nn.Module):
             return False
         if (cfg.num_expert_group or 1) > 1 or (cfg.topk_group or 1) > 1:
             return False
-        # A waterfill balancer rewrites the routing after the top-k; leave it on
-        # the layer path that supports it.
-        if self.topk.waterfill_balancer is not None or self.topk.enable_waterfill:
-            return False
         if self.gate.e_score_correction_bias is None:
             return False
         # K3 calls self.topk() without a padding mask or EPLB dispatch info, so

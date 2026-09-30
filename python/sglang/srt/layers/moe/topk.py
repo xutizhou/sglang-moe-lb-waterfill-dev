@@ -571,17 +571,6 @@ class TopK(BaseFusedOp):
             num_fused_shared_experts = 0
             output_format = TopKOutputFormat.STANDARD
 
-        self.enable_waterfill = (
-            num_fused_shared_experts > 0 and get_exec().moe.enable_waterfill
-        )
-
-        self.waterfill_balancer = None
-        if self.enable_waterfill:
-            # TODO(ch-wan): Refactor shared-expert fusion and routed TopK fusion.
-            top_k -= num_fused_shared_experts
-            num_fused_shared_experts = 0
-            output_format = TopKOutputFormat.STANDARD
-
         # Under the flashinfer_mxfp4 backend, fp4-expert ckpts take STANDARD
         # (consumes topk_ids/weights); otherwise BYPASSED. No-op on other backends.
         self.is_fp4_experts = is_fp4_experts
@@ -617,7 +606,7 @@ class TopK(BaseFusedOp):
                 raise RuntimeError(
                     "MLB L2 is enabled but ModelRunner did not attach MoELoadBalancer."
                 )
-            return self._apply_waterfill(topk_output, num_tokens)
+            return topk_output
         if not TopKOutputChecker.format_is_standard(topk_output):
             raise RuntimeError("MLB L2 routing requires StandardTopKOutput.")
 
@@ -636,16 +625,6 @@ class TopK(BaseFusedOp):
                 else 1.0
             ),
         )
-
-    def _apply_waterfill(self, topk_output: TopKOutput, num_tokens: int) -> TopKOutput:
-        if self.enable_waterfill and self.waterfill_balancer is None:
-            raise RuntimeError(
-                "Waterfill TopK must be prepared by ModelRunner before forward."
-            )
-        if self.waterfill_balancer is None:
-            return topk_output
-        assert TopKOutputChecker.format_is_standard(topk_output)
-        return self.waterfill_balancer.expand_topk(topk_output, num_tokens)
 
     def forward_musa(self, *args, **kwargs) -> TopKOutput:
         # MUSA follows the CUDA path explicitly: select_experts branches on
@@ -857,30 +836,12 @@ class TopK(BaseFusedOp):
             layer_id=self.layer_id,
         )
 
-    def empty_topk_output(
-        self, device: torch.device, *, layer_id: Optional[int] = None
-    ) -> TopKOutput:
+    def empty_topk_output(self, device: torch.device) -> TopKOutput:
         """Return an empty topk output for a rank with zero tokens this forward.
 
-        When ``layer_id`` is provided and the active dispatch algorithm is LP,
-        also calls ``LPLBSolver.solve(empty)`` so that this rank participates
-        in the EP all-reduce. Without this, an empty rank would skip the
-        collective and deadlock under DP-attention.
+        Still routed through the MoE load balancer so that this rank takes part
+        in any per-layer EP collective the routing policy issues.
         """
-        if layer_id is not None:
-            # Skip the full ExpertLocationDispatchInfo allocation — we only
-            # need the per-layer solver to participate in the EP all-reduce.
-            from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
-
-            lplb_solver = get_global_lplb_solver(layer_id)
-            if lplb_solver is not None:
-                lplb_solver.solve(
-                    torch.empty(
-                        (0, self.topk_config.top_k),
-                        dtype=torch.int32,
-                        device=device,
-                    )
-                )
         topk = self.topk_config.top_k - self.topk_config.num_fused_shared_experts
         with use_symmetric_memory(
             get_parallel().tp_group, disabled=not is_allocation_symmetric()
@@ -2310,25 +2271,7 @@ def _post_process_topk_ids(
     recorder_topk_ids = None
     _fold_pad_into_append = False
     if _is_cuda:
-        # LP path: solve LP outside torch.compile (the solver contains an
-        # EP all-reduce that can't run inside compiled regions).
-        log2phy_prob = None
-        if (
-            expert_location_dispatch_info is not None
-            and expert_location_dispatch_info.ep_dispatch_algorithm == "lp"
-        ):
-            from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
-
-            lplb_solver = get_global_lplb_solver(layer_id)
-            if lplb_solver is not None:
-                log2phy_prob = lplb_solver.solve(topk_ids)
-
-        if log2phy_prob is not None:
-            topk_ids = topk_ids_logical_to_physical(
-                topk_ids, expert_location_dispatch_info, log2phy_prob
-            )
-            _mask_topk_ids_padded_region(topk_ids, num_token_non_padded)
-        elif num_fused_shared_experts > 0:
+        if num_fused_shared_experts > 0:
             # Shared IDs are outside EPLB's routed-expert table for both global
             # and per-rank layouts, so remap only routed columns.
             shared_cols = topk_ids[:, -num_fused_shared_experts:]
