@@ -278,9 +278,7 @@ class TestMLBRuntimeContext(unittest.TestCase):
             patch(f"{module}.get_parallel", return_value=SimpleNamespace(nnodes=1)),
             patch(
                 f"{module}.get_exec",
-                return_value=SimpleNamespace(
-                    moe=SimpleNamespace(ep_dispatch_algorithm=None)
-                ),
+                return_value=SimpleNamespace(moe=SimpleNamespace()),
             ),
         ):
             list(EPLBManager.rebalance(manager))

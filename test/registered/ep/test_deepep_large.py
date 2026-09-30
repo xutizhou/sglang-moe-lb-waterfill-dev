@@ -47,7 +47,7 @@ class TestDeepseekMTP(CustomTestCase):
                 "--enable-two-batch-overlap",
                 "--ep-num-redundant-experts",
                 "32",
-                "--ep-dispatch-algorithm",
+                "--moe-load-balancer-algorithm",
                 "dynamic",
                 "--eplb-algorithm",
                 "deepseek",

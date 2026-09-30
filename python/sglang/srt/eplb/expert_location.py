@@ -196,61 +196,39 @@ class ExpertLocationMetadata:
         if common is None:
             return None
 
-        model_config_for_expert_location = common["model_config_for_expert_location"]
-        num_physical_experts = common["num_physical_experts"]
-        num_groups = model_config_for_expert_location.num_groups
-        num_nodes = 1 if use_flat_topology else get_parallel().nnodes
-
-        mlb_routing_metadata = None
         if moe_load_balancer is None:
-            from sglang.srt.eplb import eplb_algorithms
-
-            physical_to_logical_map, logical_to_all_physical_map, expert_count = (
-                eplb_algorithms.rebalance_experts(
-                    tokens_per_expert=logical_count,
-                    num_physical_experts=num_physical_experts,
-                    num_local_physical_experts=num_physical_experts
-                    // common["ep_size"],
-                    num_groups=num_groups,
-                    num_nodes=num_nodes,
-                    algorithm=eplb_algorithms.compute_algorithm(
-                        raw_algorithm=get_exec().moe.eplb_algorithm,
-                        num_groups=num_groups,
-                        num_nodes=num_nodes,
-                    ),
-                )
+            raise RuntimeError(
+                "Expert placement is planned by the MoE Load Balancer; ModelRunner "
+                "constructs it whenever --enable-eplb, --init-expert-location or "
+                "--ep-num-redundant-experts is set."
             )
-        else:
-            from moe_load_balancer.adapters.sglang import (
-                to_placement_request,
-                to_sglang_maps,
-            )
+        from moe_load_balancer.adapters.sglang import (
+            to_placement_request,
+            to_sglang_maps,
+        )
 
-            from sglang.srt.elastic_ep.elastic_ep import ElasticEPStateManager
-            from sglang.srt.runtime_context import get_context
+        from sglang.srt.elastic_ep.elastic_ep import ElasticEPStateManager
+        from sglang.srt.runtime_context import get_context
 
-            elastic_state = ElasticEPStateManager.instance()
-            request = to_placement_request(
-                logical_count,
-                context=get_context(),
-                num_nodes=1 if use_flat_topology else None,
-                active_ranks=elastic_state.active_ranks
-                if elastic_state is not None
-                else None,
-            )
-            plan = moe_load_balancer.plan_placement(request)
-            maps = to_sglang_maps(plan)
-            physical_to_logical_map = maps.physical_to_logical_map
-            logical_to_all_physical_map = maps.logical_to_all_physical_map
-            mlb_routing_metadata = maps.routing_metadata
-
+        elastic_state = ElasticEPStateManager.instance()
+        request = to_placement_request(
+            logical_count,
+            context=get_context(),
+            num_nodes=1 if use_flat_topology else None,
+            active_ranks=elastic_state.active_ranks
+            if elastic_state is not None
+            else None,
+        )
+        maps = to_sglang_maps(moe_load_balancer.plan_placement(request))
         return ExpertLocationMetadata._init_raw(
             ep_size=common["ep_size"],
-            physical_to_logical_map=physical_to_logical_map.to(get_device().device),
-            logical_to_all_physical_map=logical_to_all_physical_map.to(
+            physical_to_logical_map=maps.physical_to_logical_map.to(
                 get_device().device
             ),
-            mlb_routing_metadata=mlb_routing_metadata,
+            logical_to_all_physical_map=maps.logical_to_all_physical_map.to(
+                get_device().device
+            ),
+            mlb_routing_metadata=maps.routing_metadata,
         )
 
     @staticmethod
@@ -334,8 +312,7 @@ class ExpertLocationMetadata:
                         else torch.distributed.get_rank() % ep_size
                     ),
                 )
-                if get_exec().moe.ep_dispatch_algorithm == "static"
-                or _mlb_requires_dispatch_map()
+                if _mlb_requires_dispatch_map()
                 else None
             ),
             mlb_routing_metadata=mlb_routing_metadata or {},
@@ -604,7 +581,7 @@ def _compute_logical_to_all_physical_map(
     # Replace by the physical expert on local GPU or node if possible. Skipped
     # without an a2a backend, where all EP ranks must agree on the pick: this
     # collapse is per-rank, and the full candidate list is what lets the dispatch
-    # spread a hot expert over its replicas. See ExpertLocationDispatchInfo.
+    # spread a hot expert over its replicas.
     if moe_ep_rank is not None and get_exec().moe.moe_a2a_backend != "none":
         num_local_gpu_physical_experts = num_physical_experts // ep_size
         prefer_same_node = _prefer_same_node_experts()

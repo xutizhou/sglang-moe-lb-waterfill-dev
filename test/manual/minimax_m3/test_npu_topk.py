@@ -40,10 +40,6 @@ def _install_fake_modules():
     expert_distribution.get_global_expert_distribution_recorder = lambda: Recorder()
     sys.modules["sglang.srt.eplb.expert_distribution"] = expert_distribution
 
-    expert_location = types.ModuleType("sglang.srt.eplb.expert_location_dispatch")
-    expert_location.topk_ids_logical_to_physical = lambda topk_ids, info: topk_ids
-    sys.modules["sglang.srt.eplb.expert_location_dispatch"] = expert_location
-
     moe_topk = types.ModuleType("sglang.srt.layers.moe.topk")
 
     class StandardTopKOutput(NamedTuple):

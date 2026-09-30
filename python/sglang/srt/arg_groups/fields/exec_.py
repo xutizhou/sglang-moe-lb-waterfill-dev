@@ -764,10 +764,6 @@ class ExecMoe(msgspec.Struct):
             resolvable=True,
         ),
     ] = None
-    ep_dispatch_algorithm: A[
-        Optional[Literal["static", "dynamic", "fake", "lp"]],
-        "The algorithm to choose ranks for redundant experts in expert parallel.",
-    ] = None
     init_expert_location: A[str, "Initial location of EP experts."] = "trivial"
     enable_eplb: A[bool, "Enable EPLB algorithm"] = False
     eplb_algorithm: A[str, "Chosen EPLB algorithm"] = "auto"

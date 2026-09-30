@@ -38,7 +38,6 @@ from transformers import PretrainedConfig
 from sglang.srt.distributed import tensor_model_parallel_all_reduce
 from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
 from sglang.srt.eplb.expert_location import ModelConfigForExpertLocation
-from sglang.srt.eplb.expert_location_dispatch import ExpertLocationDispatchInfo
 from sglang.srt.layers.activation import SiluAndMul
 from sglang.srt.layers.communicator import (
     LayerCommunicator,
@@ -1001,9 +1000,6 @@ class XllmSparseMoeBlock(nn.Module):
                 hidden_states,
                 router_logits,
                 num_token_non_padded=forward_batch.num_token_non_padded,
-                expert_location_dispatch_info=(
-                    ExpertLocationDispatchInfo.init_new(layer_id=self.layer_id)
-                ),
             )
             # Apply router scaling factor after renormalization
             if self.router_scaling_factor != 1.0:
@@ -1013,9 +1009,7 @@ class XllmSparseMoeBlock(nn.Module):
                 else:
                     topk_output.topk_weights = scaled_weights
         else:
-            topk_output = self.topk.empty_topk_output(
-                hidden_states.device
-            )
+            topk_output = self.topk.empty_topk_output(hidden_states.device)
         final_hidden_states = self.experts(
             hidden_states=hidden_states,
             topk_output=topk_output,
@@ -1051,9 +1045,7 @@ class XllmSparseMoeBlock(nn.Module):
 
         if hidden_states.shape[0] == 0:
             shared_output = None
-            topk_output = self.topk.empty_topk_output(
-                hidden_states.device
-            )
+            topk_output = self.topk.empty_topk_output(hidden_states.device)
             final_hidden_states = self.experts(hidden_states, topk_output)
         else:
             shared_output = self._forward_shared_experts(hidden_states)

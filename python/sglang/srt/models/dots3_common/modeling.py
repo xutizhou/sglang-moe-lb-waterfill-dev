@@ -52,7 +52,6 @@ from sglang.srt.distributed.device_communicators.pynccl_allocator import (
 )
 from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
 from sglang.srt.eplb.expert_location import ModelConfigForExpertLocation
-from sglang.srt.eplb.expert_location_dispatch import ExpertLocationDispatchInfo
 from sglang.srt.layers import deep_gemm_wrapper
 from sglang.srt.layers.activation import SiluAndMul
 from sglang.srt.layers.attention.dsa.dsa_indexer import Indexer
@@ -515,14 +514,9 @@ class Dots3MoE(nn.Module):
                 hidden_states,
                 router_logits,
                 num_token_non_padded=forward_batch.num_token_non_padded,
-                expert_location_dispatch_info=ExpertLocationDispatchInfo.init_new(
-                    layer_id=self.layer_id,
-                ),
             )
         else:
-            topk_output = self.topk.empty_topk_output(
-                hidden_states.device
-            )
+            topk_output = self.topk.empty_topk_output(hidden_states.device)
 
         final_hidden_states = self.experts(
             hidden_states=hidden_states,
@@ -577,9 +571,6 @@ class Dots3MoE(nn.Module):
                     hidden_states=hidden_states,
                     router_logits=router_logits,
                     num_token_non_padded=state.forward_batch.num_token_non_padded,
-                    expert_location_dispatch_info=ExpertLocationDispatchInfo.init_new(
-                        layer_id=self.layer_id,
-                    ),
                 )
         else:
             state.topk_idx_local = torch.full(

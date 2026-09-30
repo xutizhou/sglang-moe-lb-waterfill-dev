@@ -84,8 +84,6 @@ eplb_args = [
     "50",
     "--expert-distribution-recorder-buffer-size",
     "50",
-    "--ep-dispatch-algorithm",
-    "static",
 ]
 
 mtp_args = [

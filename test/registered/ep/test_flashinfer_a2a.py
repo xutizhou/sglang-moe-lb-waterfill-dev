@@ -105,8 +105,6 @@ class TestFlashinferA2ACutedslStaticFP4(CustomTestCase):
                 "flashinfer",
                 "--moe-runner-backend",
                 "flashinfer_cutedsl",
-                "--ep-dispatch-algorithm",
-                "static",
                 "--quantization",
                 "modelopt_fp4",
                 "--trust-remote-code",

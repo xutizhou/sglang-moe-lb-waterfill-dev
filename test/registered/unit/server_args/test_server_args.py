@@ -1785,6 +1785,7 @@ class TestMoELoadBalancerAlgorithm(unittest.TestCase):
             model_path="dummy",
             enable_eplb=True,
             ep_size=2,
+            moe_a2a_backend="deepep",
         )
 
         handle_moe_load_balancer(server_args)
@@ -1792,6 +1793,25 @@ class TestMoELoadBalancerAlgorithm(unittest.TestCase):
         self.assertEqual(
             resolution_result(server_args, "moe_load_balancer_algorithm"), "static"
         )
+
+    def test_default_replica_routing_is_rank_invariant_without_a2a(self):
+        # Without an a2a backend every EP rank routes the same tokens, so the
+        # replica pick must not depend on the rank: `dynamic` draws from the
+        # token index.
+        for kwargs in (
+            dict(enable_eplb=True),
+            dict(ep_num_redundant_experts=4),
+            dict(init_expert_location='{"logical_count": [[[1]]]}'),
+        ):
+            server_args = ServerArgs(
+                model_path="dummy", ep_size=2, moe_a2a_backend="none", **kwargs
+            )
+            handle_moe_load_balancer(server_args)
+            self.assertEqual(
+                resolution_result(server_args, "moe_load_balancer_algorithm"),
+                "dynamic",
+                kwargs,
+            )
 
 
 class TestPortArgs(unittest.TestCase):

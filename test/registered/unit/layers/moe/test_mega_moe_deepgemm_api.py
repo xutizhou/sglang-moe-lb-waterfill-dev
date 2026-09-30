@@ -266,11 +266,6 @@ class TestDeepGemmMegaMoeApi(CustomTestCase):
             ),
             # Toy shapes.
             patch.object(mega_moe, "check_mega_moe_shapes"),
-            patch.object(
-                mega_moe.ExpertLocationDispatchInfo,
-                "init_new",
-                return_value=object(),
-            ),
             patch(
                 "sglang.srt.runtime_context.get_parallel",
                 return_value=SimpleNamespace(

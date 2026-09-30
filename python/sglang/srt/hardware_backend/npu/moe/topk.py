@@ -4,7 +4,6 @@ import torch
 from sgl_kernel_npu.norm.l1_norm import l1_norm
 
 from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
-from sglang.srt.eplb.expert_location_dispatch import topk_ids_logical_to_physical
 from sglang.srt.layers.moe.topk import (
     StandardTopKOutput,
     capture_routed_experts_if_allowed,
@@ -12,7 +11,6 @@ from sglang.srt.layers.moe.topk import (
 )
 
 if TYPE_CHECKING:
-    from sglang.srt.eplb.expert_location_dispatch import ExpertLocationDispatchInfo
     from sglang.srt.layers.moe.topk import TopKConfig, TopKOutput
 
 
@@ -21,7 +19,6 @@ def fused_topk_npu(
     router_logits: torch.Tensor,
     topk_config: "TopKConfig",
     num_token_non_padded: Optional[torch.Tensor] = None,
-    expert_location_dispatch_info: Optional["ExpertLocationDispatchInfo"] = None,
     layer_id: Optional[int] = None,
     defer_expert_recording: bool = False,
 ) -> "TopKOutput":
@@ -107,12 +104,9 @@ def fused_topk_npu(
             router_logits=router_logits,
             topk_config=topk_config,
             num_token_non_padded=num_token_non_padded,
-            expert_location_dispatch_info=expert_location_dispatch_info,
             defer_expert_recording=defer_expert_recording,
         )
 
-    if expert_location_dispatch_info is not None:
-        topk_ids = topk_ids_logical_to_physical(topk_ids, expert_location_dispatch_info)
     if not defer_expert_recording:
         get_global_expert_distribution_recorder().on_select_experts(topk_ids=topk_ids)
         capture_routed_experts_if_allowed(topk_config, layer_id, topk_ids)

@@ -10,10 +10,6 @@ from sglang.srt.environ import envs
 from sglang.srt.eplb.expert_distribution import (
     get_global_expert_distribution_recorder,
 )
-from sglang.srt.eplb.expert_location_dispatch import (
-    ExpertLocationDispatchInfo,
-    topk_ids_logical_to_physical,
-)
 from sglang.srt.layers.moe.topk import (
     _RENORMALIZE_SUM_EPSILON,
     StandardTopKOutput,
@@ -239,7 +235,6 @@ class HashTopK(nn.Module):
         router_logits: torch.Tensor,
         input_ids: torch.Tensor,
         num_token_non_padded: Optional[torch.Tensor] = None,
-        expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
         forward_batch=None,
     ):
         assert input_ids.shape[0] == hidden_states.shape[0] == router_logits.shape[0], (
@@ -267,38 +262,22 @@ class HashTopK(nn.Module):
         if self.apply_routed_scaling_factor_on_output:
             topk_weights = topk_weights * self.routed_scaling_factor
 
-        if self.moe_load_balancer is not None:
-            expert_location_dispatch_info = None
         num_fused_shared_experts = self.num_fused_shared_experts
         recorder_topk_ids = None
         if has_per_rank_fused_shared_slots(num_fused_shared_experts):
-            shared_cols = topk_ids[:, -num_fused_shared_experts:]
-            routed_cols = topk_ids[:, :-num_fused_shared_experts]
-            routed_cols = topk_ids_logical_to_physical(
-                routed_cols, expert_location_dispatch_info
-            )
-            topk_ids = torch.cat([routed_cols, shared_cols], dim=-1)
-            recorder_topk_ids = routed_cols
-
-            num_physical_routed_experts = (
-                expert_location_dispatch_info.num_physical_experts
-                if expert_location_dispatch_info is not None
-                else self.num_experts
-            )
+            # ExpertDistributionRecorder tracks the routed experts as selected,
+            # before the per-rank shared-slot layout shifts their ids.
+            recorder_topk_ids = topk_ids[:, :-num_fused_shared_experts].clone()
             topk_ids, topk_weights = remap_topk_for_per_rank_shared_slots(
                 topk_ids,
                 topk_weights,
                 num_fused_shared_experts,
-                num_physical_routed_experts,
+                self.num_experts,
                 TopKConfig(
                     top_k=self.topk,
                     num_fused_shared_experts=num_fused_shared_experts,
                     routed_scaling_factor=self.routed_scaling_factor,
                 ),
-            )
-        else:
-            topk_ids = topk_ids_logical_to_physical(
-                topk_ids, expert_location_dispatch_info
             )
         if is_hip():
             _zero_topk_weights_padded_region(topk_weights, num_token_non_padded)

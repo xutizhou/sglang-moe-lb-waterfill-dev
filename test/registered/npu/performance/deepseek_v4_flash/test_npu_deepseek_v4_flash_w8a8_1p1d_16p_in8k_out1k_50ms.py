@@ -127,8 +127,6 @@ DEEPSEEK_V4_FLASH_W8A8_1P1D_PREFILL_ARGS = [
     "--disable-radix-cache",
     "--load-balance-method",
     "round_robin",
-    "--ep-dispatch-algorithm",
-    "static",
     "--init-expert-location",
     "/root/.cache/modelscope/hub/models/hot_map/pd_prefill_0720.pt",
 ]

@@ -76,8 +76,6 @@ class _BaseTestDynamicEPLB(CustomTestCase):
                     # TODO auto determine these flags
                     "--expert-distribution-recorder-mode",
                     "stat",
-                    "--ep-dispatch-algorithm",
-                    "static",
                     *cls.extra_args,
                 ],
             )
@@ -154,8 +152,6 @@ class TestStaticEPLB(CustomTestCase):
             engine = sgl.Engine(
                 **engine_kwargs,
                 init_expert_location=str(snapshot_path),
-                # TODO auto determine these flags
-                ep_dispatch_algorithm="static",
                 port=12000,
             )
             self._assert_engine_generate_correct(engine)

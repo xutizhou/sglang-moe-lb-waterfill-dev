@@ -56,7 +56,6 @@ from sglang.srt.distributed import divide
 from sglang.srt.environ import envs
 from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
 from sglang.srt.eplb.expert_location import ModelConfigForExpertLocation
-from sglang.srt.eplb.expert_location_dispatch import ExpertLocationDispatchInfo
 from sglang.srt.layers import deep_gemm_wrapper
 from sglang.srt.layers.activation import SiluAndMul
 from sglang.srt.layers.amx_utils import PackWeightMethod
@@ -997,11 +996,6 @@ class DeepseekV2MoE(nn.Module):
         has_shared_output = (
             hidden_states.shape[0] > 0 and self.num_fused_shared_experts == 0
         )
-        dispatch_info = (
-            ExpertLocationDispatchInfo.init_new(layer_id=self.layer_id)
-            if get_exec().moe.enable_eplb and not self.is_nextn
-            else None
-        )
 
         # router_logits: (num_tokens, n_experts)
         router_logits = self.gate(hidden_states, gemm_output_zero_allocator)
@@ -1029,7 +1023,6 @@ class DeepseekV2MoE(nn.Module):
                     hidden_states,
                     router_logits,
                     num_token_non_padded=num_token_non_padded,
-                    expert_location_dispatch_info=dispatch_info,
                     **topk_kwargs,
                 )
         # Issued after the router so the main chain stays on the main stream at replay.
@@ -1218,11 +1211,6 @@ class DeepseekV2MoE(nn.Module):
             self.shared_experts.gate_up_proj
         ):
             return self.forward_cpu(hidden_states)
-        dispatch_info = (
-            ExpertLocationDispatchInfo.init_new(layer_id=self.layer_id)
-            if get_exec().moe.enable_eplb and not self.is_nextn
-            else None
-        )
         defer_shared = not self.experts.moe_runner_config.inplace
         # PoC (SGLANG_DP_SHARED_EXPERT_LOCAL): shared expert is computed on the LOCAL
         # hidden in the decoder layer (before the dp gather) and added after the
@@ -1265,15 +1253,12 @@ class DeepseekV2MoE(nn.Module):
                     hidden_states,
                     router_logits,
                     num_token_non_padded=num_token_non_padded,
-                    expert_location_dispatch_info=dispatch_info,
                     **topk_kwargs,
                 )
         else:
             pre_quant_input = None
             shared_output = None
-            topk_output = self.topk.empty_topk_output(
-                hidden_states.device
-            )
+            topk_output = self.topk.empty_topk_output(hidden_states.device)
 
         if self._fuse_shared_experts_inside_sbo and not skip_shared_experts:
             shared_output = None
@@ -1458,20 +1443,11 @@ class DeepseekV2MoE(nn.Module):
                 hidden_states,
                 router_logits,
                 num_token_non_padded=forward_batch.num_token_non_padded,
-                expert_location_dispatch_info=(
-                    ExpertLocationDispatchInfo.init_new(
-                        layer_id=self.layer_id,
-                    )
-                    if not self.is_nextn
-                    else None
-                ),
                 forward_batch=forward_batch,
                 **topk_kwargs,
             )
         else:
-            topk_output = self.topk.empty_topk_output(
-                hidden_states.device
-            )
+            topk_output = self.topk.empty_topk_output(hidden_states.device)
 
         if sbo_overlap_dispatch_flag:
             shared_output = None
@@ -1853,20 +1829,11 @@ class DeepseekV2MoE(nn.Module):
                     hidden_states=hidden_states,
                     router_logits=router_logits,
                     num_token_non_padded=state.forward_batch.num_token_non_padded,
-                    expert_location_dispatch_info=(
-                        ExpertLocationDispatchInfo.init_new(
-                            layer_id=self.layer_id,
-                        )
-                        if not self.is_nextn
-                        else None
-                    ),
                     forward_batch=state.forward_batch,
                     **topk_kwargs,
                 )
         else:
-            state.topk_output = self.topk.empty_topk_output(
-                hidden_states.device
-            )
+            state.topk_output = self.topk.empty_topk_output(hidden_states.device)
 
     def op_dispatch_a(self, state):
         if self.ep_size > 1:
