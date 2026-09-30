@@ -21,7 +21,6 @@ from sglang.srt.layers.moe.topk import grouped_topk_gpu as native_grouped_topk
 from sglang.srt.layers.moe.topk import (
     grouped_topk_xpu,
 )
-from sglang.srt.runtime_context import get_context
 from sglang.test.ci.ci_register import register_xpu_ci
 from sglang.test.test_utils import CustomTestCase
 
@@ -362,58 +361,53 @@ class TestBiasedGroupedTopK(CustomTestCase):
         num_tokens = [b * seq_len for b in bs]
         num_fused_shared_experts_list = [0, 1]
 
-        with get_context().override_server_args(enable_waterfill=False):
-            for E_num in E_num_list:
-                for M in num_tokens:
-                    for num_fused_shared_experts in num_fused_shared_experts_list:
-                        hidden_states = torch.randn(
-                            M, 1, dtype=torch.float32, device=device
-                        )
-                        router_logits = torch.randn(
-                            M, E_num, dtype=dtype, device=device
-                        )
-                        input_ids = torch.randint(
-                            low=0,
-                            high=vocab_size,
-                            size=(M,),
-                            dtype=torch.int64,
-                            device=device,
-                        )
+        for E_num in E_num_list:
+            for M in num_tokens:
+                for num_fused_shared_experts in num_fused_shared_experts_list:
+                    hidden_states = torch.randn(
+                        M, 1, dtype=torch.float32, device=device
+                    )
+                    router_logits = torch.randn(M, E_num, dtype=dtype, device=device)
+                    input_ids = torch.randint(
+                        low=0,
+                        high=vocab_size,
+                        size=(M,),
+                        dtype=torch.int64,
+                        device=device,
+                    )
 
-                        hash_topk = HashTopK(
-                            topk=topk,
-                            num_experts=E_num,
-                            num_fused_shared_experts=num_fused_shared_experts,
-                            vocab_size=vocab_size,
-                            scoring_func="sqrtsoftplus",
-                            routed_scaling_factor=2.5,
-                        ).to(device)
-                        topk_routed = hash_topk.tid2eid.shape[1]
-                        with torch.no_grad():
-                            hash_topk.tid2eid.copy_(
-                                torch.randint(
-                                    low=0,
-                                    high=E_num,
-                                    size=(vocab_size, topk_routed),
-                                    dtype=torch.int32,
-                                    device=device,
-                                )
+                    hash_topk = HashTopK(
+                        topk=topk,
+                        num_experts=E_num,
+                        num_fused_shared_experts=num_fused_shared_experts,
+                        vocab_size=vocab_size,
+                        scoring_func="sqrtsoftplus",
+                        routed_scaling_factor=2.5,
+                    ).to(device)
+                    topk_routed = hash_topk.tid2eid.shape[1]
+                    with torch.no_grad():
+                        hash_topk.tid2eid.copy_(
+                            torch.randint(
+                                low=0,
+                                high=E_num,
+                                size=(vocab_size, topk_routed),
+                                dtype=torch.int32,
+                                device=device,
                             )
-
-                            ref_topk_weights, ref_topk_ids = hash_topk._forward_torch(
-                                router_logits, input_ids
-                            )
-
-                            output = hash_topk(
-                                hidden_states=hidden_states,
-                                router_logits=router_logits,
-                                input_ids=input_ids,
-                            )
-
-                        torch.testing.assert_close(output.topk_ids, ref_topk_ids)
-                        torch.testing.assert_close(
-                            output.topk_weights, ref_topk_weights
                         )
+
+                        ref_topk_weights, ref_topk_ids = hash_topk._forward_torch(
+                            router_logits, input_ids
+                        )
+
+                        output = hash_topk(
+                            hidden_states=hidden_states,
+                            router_logits=router_logits,
+                            input_ids=input_ids,
+                        )
+
+                    torch.testing.assert_close(output.topk_ids, ref_topk_ids)
+                    torch.testing.assert_close(output.topk_weights, ref_topk_weights)
 
 
 if __name__ == "__main__":

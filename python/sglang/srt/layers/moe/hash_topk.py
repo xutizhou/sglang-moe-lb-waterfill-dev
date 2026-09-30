@@ -68,16 +68,6 @@ class HashTopK(nn.Module):
             topk -= num_fused_shared_experts
             num_fused_shared_experts = 0
 
-        self.enable_waterfill = (
-            num_fused_shared_experts > 0 and get_exec().moe.enable_waterfill
-        )
-        self.waterfill_balancer = None
-
-        if self.enable_waterfill:
-            # Waterfill appends the shared expert after EPLB maps routed IDs.
-            topk -= num_fused_shared_experts
-            num_fused_shared_experts = 0
-
         self.num_experts = num_experts
         self.topk = topk
         self.routed_scaling_factor = routed_scaling_factor
@@ -115,18 +105,8 @@ class HashTopK(nn.Module):
         with torch.no_grad():
             self.tid2eid.copy_(tid2eid.to(self.tid2eid.dtype))
 
-    def empty_topk_output(
-        self, device: torch.device, *, layer_id: Optional[int] = None
-    ):
+    def empty_topk_output(self, device: torch.device):
         topk = self.topk - self.num_fused_shared_experts
-        if layer_id is not None:
-            from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
-
-            lplb_solver = get_global_lplb_solver(layer_id)
-            if lplb_solver is not None:
-                lplb_solver.solve(
-                    torch.empty((0, topk), dtype=torch.int32, device=device)
-                )
         topk_weights = torch.empty((0, topk), dtype=torch.float32, device=device)
         topk_ids = torch.full((0, topk), -1, dtype=torch.int32, device=device)
         router_logits = torch.empty((0, topk), dtype=torch.float32, device=device)
@@ -156,7 +136,7 @@ class HashTopK(nn.Module):
                 raise RuntimeError(
                     "MLB L2 is enabled but ModelRunner did not attach MoELoadBalancer."
                 )
-            return self._apply_waterfill(topk_output, num_tokens)
+            return topk_output
 
         from sglang.srt.eplb.moe_load_balancer_glue import route_topk_with_mlb
 
@@ -169,17 +149,6 @@ class HashTopK(nn.Module):
             forward_batch=forward_batch,
             routed_scaling_factor=self.routed_scaling_factor,
         )
-
-    def _apply_waterfill(
-        self, topk_output: StandardTopKOutput, num_tokens: int
-    ) -> StandardTopKOutput:
-        if self.enable_waterfill and self.waterfill_balancer is None:
-            raise RuntimeError(
-                "Waterfill HashTopK must be prepared by ModelRunner before forward."
-            )
-        if self.waterfill_balancer is None:
-            return topk_output
-        return self.waterfill_balancer.expand_topk(topk_output, num_tokens)
 
     def _forward_torch(
         self, router_logits: torch.Tensor, input_ids: torch.Tensor
@@ -301,25 +270,12 @@ class HashTopK(nn.Module):
         if self.moe_load_balancer is not None:
             expert_location_dispatch_info = None
         num_fused_shared_experts = self.num_fused_shared_experts
-        log2phy_prob = None
-        if (
-            expert_location_dispatch_info is not None
-            and expert_location_dispatch_info.ep_dispatch_algorithm == "lp"
-        ):
-            if self.layer_id is None:
-                raise RuntimeError("HashTopK LP dispatch requires layer_id.")
-            from sglang.srt.eplb.lplb_solver import get_global_lplb_solver
-
-            lplb_solver = get_global_lplb_solver(self.layer_id)
-            if lplb_solver is not None:
-                log2phy_prob = lplb_solver.solve(topk_ids)
-
         recorder_topk_ids = None
         if has_per_rank_fused_shared_slots(num_fused_shared_experts):
             shared_cols = topk_ids[:, -num_fused_shared_experts:]
             routed_cols = topk_ids[:, :-num_fused_shared_experts]
             routed_cols = topk_ids_logical_to_physical(
-                routed_cols, expert_location_dispatch_info, log2phy_prob
+                routed_cols, expert_location_dispatch_info
             )
             topk_ids = torch.cat([routed_cols, shared_cols], dim=-1)
             recorder_topk_ids = routed_cols
@@ -342,7 +298,7 @@ class HashTopK(nn.Module):
             )
         else:
             topk_ids = topk_ids_logical_to_physical(
-                topk_ids, expert_location_dispatch_info, log2phy_prob
+                topk_ids, expert_location_dispatch_info
             )
         if is_hip():
             _zero_topk_weights_padded_region(topk_weights, num_token_non_padded)

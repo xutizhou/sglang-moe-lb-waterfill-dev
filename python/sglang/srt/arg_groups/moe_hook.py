@@ -47,9 +47,9 @@ def handle_moe_load_balancer(server_args: Any):
         algorithm = RoutingPipeline.default_replica_routing().name
     pipeline = get_moe_load_balancer_pipeline(algorithm)
     if pipeline is not None:
-        if cfg.ep_dispatch_algorithm is not None or cfg.enable_waterfill:
+        if cfg.ep_dispatch_algorithm is not None:
             raise ValueError(
-                "--moe-load-balancer-algorithm cannot be combined with --ep-dispatch-algorithm or --enable-waterfill"
+                "--moe-load-balancer-algorithm cannot be combined with --ep-dispatch-algorithm"
             )
         resolutions = {"moe_load_balancer_algorithm": pipeline.name}
         if pipeline.placement_policy is not None:
@@ -316,9 +316,7 @@ def handle_a2a_moe(server_args: Any):
     from sglang.srt.eplb.moe_load_balancer_glue import get_moe_load_balancer_pipeline
 
     pipeline = get_moe_load_balancer_pipeline(cfg.moe_load_balancer_algorithm)
-    if cfg.enable_waterfill or (
-        pipeline is not None and pipeline.capabilities.routes_shared_expert
-    ):
+    if pipeline is not None and pipeline.capabilities.routes_shared_expert:
         declare_resolution(
             server_args, "_handle_a2a_moe", enforce_shared_experts_fusion=True
         )

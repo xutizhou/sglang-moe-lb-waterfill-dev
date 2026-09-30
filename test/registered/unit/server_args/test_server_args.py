@@ -2362,11 +2362,14 @@ class TestAdaptiveSpecArgs(CustomTestCase):
 
 
 class TestWaterfillArgs(CustomTestCase):
+    """MLB's Waterfill (--moe-load-balancer-algorithm waterfill) drives the
+    shared-experts-fusion and a2a-backend resolutions."""
+
     def test_waterfill_enforces_shared_experts_fusion(self):
         server_args = ServerArgs(
             model_path="dummy",
             moe_a2a_backend="deepep",
-            enable_waterfill=True,
+            moe_load_balancer_algorithm="waterfill",
             disable_shared_experts_fusion=True,
         )
         # dummy-model path short-circuits __post_init__; invoke the handler directly.
@@ -2382,7 +2385,7 @@ class TestWaterfillArgs(CustomTestCase):
         server_args = ServerArgs(
             model_path="dummy",
             moe_a2a_backend="none",
-            enable_waterfill=True,
+            moe_load_balancer_algorithm="waterfill",
         )
         # dummy-model path short-circuits __post_init__; invoke the handler directly.
         handle_a2a_moe(server_args)
@@ -2393,27 +2396,11 @@ class TestWaterfillArgs(CustomTestCase):
         self.assertEqual(resolved_view(server_args).moe_a2a_backend, "deepep")
         self.assertTrue(resolution_result(server_args, "enforce_shared_experts_fusion"))
 
-    def test_waterfill_keeps_megamoe_backend(self):
-        server_args = ServerArgs(
-            model_path="dummy",
-            moe_a2a_backend="megamoe",
-            enable_waterfill=True,
-            disable_shared_experts_fusion=True,
-        )
-        # dummy-model path short-circuits __post_init__; invoke the handler directly.
-        handle_a2a_moe(server_args)
-
-        from sglang.srt.arg_groups.overrides import resolved_view
-
-        self.assertEqual(resolved_view(server_args).moe_a2a_backend, "megamoe")
-        self.assertFalse(resolved_view(server_args).disable_shared_experts_fusion)
-        self.assertTrue(resolution_result(server_args, "enforce_shared_experts_fusion"))
-
     def test_waterfill_supports_deepep_low_latency_mode(self):
         server_args = ServerArgs(
             model_path="dummy",
             moe_a2a_backend="deepep",
-            enable_waterfill=True,
+            moe_load_balancer_algorithm="waterfill",
             deepep_mode="low_latency",
         )
         # dummy-model path short-circuits __post_init__; invoke the handler directly.

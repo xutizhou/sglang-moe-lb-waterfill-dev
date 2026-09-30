@@ -150,8 +150,6 @@ from sglang.srt.model_executor.model_runner_components.load_model_utils import (
 )
 from sglang.srt.model_executor.model_runner_components.moe_ep_setup import (
     check_quantized_moe_compatibility,
-    init_lplb_solvers,
-    prepare_moe_topk,
 )
 from sglang.srt.model_executor.model_runner_components.ngram_embedding_manager import (
     NgramEmbeddingManager,
@@ -661,7 +659,6 @@ class ModelRunner:
         self.maybe_init_remote_instance_transfer_engine()
         self.moe_load_balancer = self._create_moe_load_balancer()
         self.maybe_init_expert_location_metadata()
-        self.maybe_init_lplb_solvers()
         self.maybe_init_eplb_manager()
         self.expert_location_updater = ExpertLocationUpdater()
         self.maybe_init_elastic_ep()
@@ -669,12 +666,6 @@ class ModelRunner:
         self.sampler = create_sampler()
         self.load_model()
         self._prepare_moe_topk()
-        prepare_moe_topk(
-            model=self.model,
-            model_config=self.model_config,
-            moe_ep_size=get_parallel().moe_ep_size,
-            moe_ep_rank=get_parallel().moe_ep_rank,
-        )
 
         self.maybe_init_dwdp()
 
@@ -778,10 +769,6 @@ class ModelRunner:
                 rank=expert_rank,
             )
         )
-
-    def maybe_init_lplb_solvers(self):
-        if get_exec().moe.ep_dispatch_algorithm == "lp" and not self.is_draft_worker:
-            init_lplb_solvers(model_config=self.model_config)
 
     def maybe_init_eplb_manager(self):
         self.eplb_manager = (

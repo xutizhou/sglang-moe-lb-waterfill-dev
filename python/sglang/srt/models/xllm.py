@@ -1014,7 +1014,7 @@ class XllmSparseMoeBlock(nn.Module):
                     topk_output.topk_weights = scaled_weights
         else:
             topk_output = self.topk.empty_topk_output(
-                hidden_states.device, layer_id=self.layer_id
+                hidden_states.device
             )
         final_hidden_states = self.experts(
             hidden_states=hidden_states,
@@ -1052,7 +1052,7 @@ class XllmSparseMoeBlock(nn.Module):
         if hidden_states.shape[0] == 0:
             shared_output = None
             topk_output = self.topk.empty_topk_output(
-                hidden_states.device, layer_id=self.layer_id
+                hidden_states.device
             )
             final_hidden_states = self.experts(hidden_states, topk_output)
         else:

@@ -26,7 +26,7 @@ sglang/kernels/
 
 Operator groups (all populated): `activation`, `attention`, `communication`,
 `diffusion`, `elementwise`, `embeddings`, `gemm`, `grammar`, `kv_canary`,
-`kvcache`, `layernorm`, `lplb`, `mamba`, `memory`, `moe`, `quantization`,
+`kvcache`, `layernorm`, `mamba`, `memory`, `moe`, `quantization`,
 `sampling`, `speculative`.
 
 As of the RFC #29630 finale (#32072) the legacy `sglang.jit_kernel` package has

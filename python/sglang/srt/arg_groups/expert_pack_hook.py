@@ -50,8 +50,6 @@ def handle_expert_pack(server_args: Any) -> None:
         errors.append(
             "--enforce-shared-experts-fusion is incompatible with expert_pack"
         )
-    if cfg.enable_waterfill:
-        errors.append("--enable-waterfill is incompatible with expert_pack")
 
     explicit_cuda_graph_backends = {
         Phase.DECODE: cfg.cuda_graph_backend_decode,

@@ -161,7 +161,6 @@ _PHASE25_TRITON_KERNELS = [
     ("rocm_moe_utils", "upscale"),
     ("rocm_moe_utils", "upscale_mxfp4"),
     ("router", "fused_moe_router_shim"),
-    ("deepep_waterfill_kernels", "materialize_waterfill_dispatch_fused"),
     ("fill_padded_rows", "_fill_padded_rows"),
     ("moe_fused_mul_sum", "moe_fused_mul_sum"),
 ]
