@@ -6,15 +6,22 @@ from typing import Optional
 
 import torch
 
+from sglang.srt.model_executor.forward_context import (
+    get_forward_context,
+    has_forward_context,
+)
 from sglang.srt.runtime_context import get_context
 
 _FORWARD_MODE_TO_STAGE = {
     "EXTEND": "prefill",
+    "SPLIT_PREFILL": "prefill",
+    "DLLM_EXTEND": "prefill",
     "DECODE": "decode",
     "MIXED": "mixed",
     "IDLE": "idle",
     "TARGET_VERIFY": "speculative",
     "DRAFT_EXTEND": "speculative",
+    "DRAFT_EXTEND_V2": "speculative",
 }
 
 
@@ -25,10 +32,15 @@ def route_topk_with_mlb(
     topk_output,
     num_tokens: int,
     num_token_non_padded: Optional[torch.Tensor],
-    forward_batch,
     routed_scaling_factor: float,
 ):
-    """Run the configured L2 pipeline and materialize SGLang TopK output."""
+    """Run the configured L2 pipeline and materialize SGLang TopK output.
+
+    ``topk_output`` holds logical expert ids straight from the router; the
+    returned output holds physical ids (and the fused shared-expert slot when
+    the pipeline routes it) and has been recorded for EPLB statistics and
+    routed-experts capture.
+    """
 
     from moe_load_balancer.adapters.sglang import (
         to_routing_request,
@@ -42,7 +54,7 @@ def route_topk_with_mlb(
     if refresh is not None:
         # Coupled placement re-plans this layer from the current batch and
         # commits it before routing reads the placement.
-        refresh(layer_id, topk_output.topk_ids, forward_batch)
+        refresh(layer_id, topk_output.topk_ids)
     request = to_routing_request(
         context=context,
         layer_id=layer_id,
@@ -51,7 +63,7 @@ def route_topk_with_mlb(
         token_count=(
             num_token_non_padded if num_token_non_padded is not None else num_tokens
         ),
-        stage=_stage_from_forward_batch(forward_batch),
+        stage=_current_stage(),
         routed_scaling_factor=routed_scaling_factor,
     )
     decision = moe_load_balancer.route_tokens(request)
@@ -76,10 +88,11 @@ def route_topk_with_mlb(
     )
 
 
-def _stage_from_forward_batch(forward_batch) -> Optional[str]:
-    if forward_batch is None:
+def _current_stage() -> Optional[str]:
+    """Routing stage of the active forward (ForwardContext.forward_mode)."""
+    if not has_forward_context():
         return None
-    forward_mode = getattr(forward_batch, "forward_mode", None)
+    forward_mode = get_forward_context().forward_mode
     if forward_mode is None:
         return None
     name = getattr(forward_mode, "name", None) or str(forward_mode).upper()

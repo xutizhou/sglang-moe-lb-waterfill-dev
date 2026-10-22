@@ -105,7 +105,7 @@ def test_routing_glue_refreshes_placement_before_routing():
     )
     with (
         get_context().resources.override(
-            mlb_placement_refresh=lambda layer, ids, batch: events.append(
+            mlb_placement_refresh=lambda layer, ids: events.append(
                 ("refresh", layer, ids is output.topk_ids)
             ),
             expert_distribution_recorder=Mock(),
@@ -119,7 +119,6 @@ def test_routing_glue_refreshes_placement_before_routing():
             topk_output=output,
             num_tokens=0,
             num_token_non_padded=None,
-            forward_batch=None,
             routed_scaling_factor=1.0,
         )
     assert events == [("refresh", 3, True), "route"]

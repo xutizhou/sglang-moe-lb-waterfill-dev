@@ -106,7 +106,6 @@ def _run_l2_mode(mlb, metadata, recorder, rank, mode, device, context):
             num_token_non_padded=torch.tensor(
                 num_tokens, dtype=torch.int32, device=device
             ),
-            forward_batch=None,
             routed_scaling_factor=1.0,
         )
 

@@ -331,7 +331,6 @@ class TestMLBRuntimeContext(unittest.TestCase):
                 topk_output=topk,
                 num_tokens=2,
                 num_token_non_padded=None,
-                forward_batch=None,
                 routed_scaling_factor=1.0,
             )
         adapt_request.assert_called_once_with(
