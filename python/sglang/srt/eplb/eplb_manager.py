@@ -28,6 +28,13 @@ logger = logging.getLogger(__name__)
 
 
 class EPLBManager:
+    # A coupled placement policy (the L2 expression names its L1 half, e.g.
+    # ultraep) re-plans each layer from the batch it is about to route, every
+    # `eplb_rebalance_num_iterations` representative batches, instead of the
+    # periodic whole-model rebalance.
+    refreshes_per_layer = False
+    _forward_batch = None
+
     def __init__(
         self,
         *,
@@ -54,16 +61,11 @@ class EPLBManager:
         self._rebalance_num_iterations = get_exec().moe.eplb_rebalance_num_iterations
         self._rebalance_disabled_reason = None
         self._rebalance_disabled_logged = False
-        # A coupled placement policy (the L2 expression names its L1 half, e.g.
-        # ultraep) re-plans each layer from the batch it is about to route,
-        # every `eplb_rebalance_num_iterations` representative batches, instead
-        # of the periodic whole-model rebalance below.
         self.refreshes_per_layer = (
             moe_load_balancer is not None
             and moe_load_balancer.placement_policy is not None
         )
         self._refresh_gate = None
-        self._forward_batch = None
         if self.refreshes_per_layer:
             from evenmoe.policies.l1 import RefreshGate
 

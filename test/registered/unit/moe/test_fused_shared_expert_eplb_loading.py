@@ -22,6 +22,7 @@ class TestFusedSharedExpertEPLBLoading(TestCase):
         moe.moe_ep_size = 16
         moe.layer_id = 0
         moe.quant_config = None
+        moe.uses_expert_location = True
         moe._weight_loader_physical = mock.Mock()
         metadata = mock.Mock(num_logical_experts=256)
         param = mock.Mock(_sglang_require_global_experts=require_global_experts)

@@ -199,7 +199,9 @@ def test_current_batch_refresh_includes_idle_rank_and_commits_before_routing(emp
             mlb_model_info={"num_logical_experts": 2, "num_groups": 1},
         ),
         context.parallel.override(
-            moe_ep_rank=0, moe_ep_group=SimpleNamespace(device_group=object())
+            moe_ep_rank=0,
+            tp_rank=0,
+            moe_ep_group=SimpleNamespace(device_group=object()),
         ),
         patch("torch.cuda.is_current_stream_capturing", return_value=False),
         patch(

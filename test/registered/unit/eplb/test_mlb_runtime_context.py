@@ -35,6 +35,7 @@ class TestMLBRuntimeContext(unittest.TestCase):
         with (
             context.override_server_args(
                 moe_load_balancer_algorithm="static",
+                tp_size=2,
                 ep_size=2,
                 ep_num_redundant_experts=2,
             ),
@@ -275,7 +276,10 @@ class TestMLBRuntimeContext(unittest.TestCase):
                 f"{module}.get_global_expert_distribution_recorder",
                 return_value=recorder,
             ),
-            patch(f"{module}.get_parallel", return_value=SimpleNamespace(nnodes=1)),
+            patch(
+                f"{module}.get_parallel",
+                return_value=SimpleNamespace(nnodes=1, tp_rank=0),
+            ),
             patch(
                 f"{module}.get_exec",
                 return_value=SimpleNamespace(
@@ -434,19 +438,22 @@ class TestMLBRuntimeContext(unittest.TestCase):
             generate_weight_name_filter=lambda missing: missing,
         )
         committed = Mock(side_effect=lambda layers: order.append("commit"))
-        update_expert_location_with_recovery(
-            expert_location_updater=updater,
-            model=model,
-            new_expert_location_metadata=object(),
-            update_layer_ids=[0],
-            nnodes=1,
-            tp_rank=0,
-            expert_backup_client=backup,
-            update_weights_from_disk_callable=Mock(),
-            ep_dispatch_algorithm=None,
-            init_lplb_solvers_callable=Mock(),
-            on_placement_committed=committed,
-        )
+        with patch(
+            "sglang.srt.eplb.eplb_manager.get_parallel",
+            return_value=SimpleNamespace(nnodes=1, tp_rank=0),
+        ):
+            update_expert_location_with_recovery(
+                expert_location_updater=updater,
+                model=model,
+                new_expert_location_metadata=object(),
+                update_layer_ids=[0],
+                tp_rank=0,
+                expert_backup_client=backup,
+                update_weights_from_disk_callable=Mock(),
+                ep_dispatch_algorithm=None,
+                init_lplb_solvers_callable=Mock(),
+                on_placement_committed=committed,
+            )
         self.assertEqual(order, ["move", "recover", "commit"])
         committed.assert_called_once_with([0])
 
@@ -456,13 +463,18 @@ class TestMLBRuntimeContext(unittest.TestCase):
         backup = Mock(use_backup=True)
         backup.update_weights.side_effect = RuntimeError("recovery failed")
         committed = Mock()
-        with self.assertRaisesRegex(RuntimeError, "recovery failed"):
+        with (
+            self.assertRaisesRegex(RuntimeError, "recovery failed"),
+            patch(
+                "sglang.srt.eplb.eplb_manager.get_parallel",
+                return_value=SimpleNamespace(nnodes=1, tp_rank=0),
+            ),
+        ):
             update_expert_location_with_recovery(
                 expert_location_updater=updater,
                 model=SimpleNamespace(routed_experts_weights_of_layer={}),
                 new_expert_location_metadata=object(),
                 update_layer_ids=[0],
-                nnodes=1,
                 tp_rank=0,
                 expert_backup_client=backup,
                 update_weights_from_disk_callable=Mock(),

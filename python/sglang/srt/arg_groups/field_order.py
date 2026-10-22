@@ -314,7 +314,6 @@ POSITIONAL_FIELD_ORDER = (
     "fuseep_mode",
     "deepep_dispatcher_output_dtype",
     "ep_num_redundant_experts",
-    "moe_load_balancer_algorithm",
     "ep_dispatch_algorithm",
     "init_expert_location",
     "enable_eplb",
@@ -548,5 +547,6 @@ POSITIONAL_FIELD_ORDER = (
     "enable_nvidia_megakernel",
     "enable_megamoe_for_layernorm_sp",
     "enable_http_worker_reuseport",
+    "moe_load_balancer_algorithm",
 )
 # fmt: on
