@@ -70,7 +70,7 @@ class ExpertLocationMetadata:
     ep_size: int
     # (layers, num_logical_experts)
     logical_to_rank_dispatch_physical_map: Optional[torch.Tensor]
-    # layer_id -> per-layer state an MLB placement plan publishes for its
+    # layer_id -> per-layer state an EvenMoE placement plan publishes for its
     # routing half (carried into PlacementSnapshot.metadata; see adapters.sglang).
     mlb_routing_metadata: dict = dataclass_field(default_factory=dict)
 
@@ -221,7 +221,7 @@ class ExpertLocationMetadata:
                 )
             )
         else:
-            from moe_load_balancer.adapters.sglang import (
+            from evenmoe.adapters.sglang import (
                 to_placement_request,
                 to_sglang_maps,
             )
@@ -835,7 +835,7 @@ def compute_initial_expert_location_metadata(
     if "physical_to_logical_map" in data_dict:
         if coupled:
             raise ValueError(
-                "Coupled MLB placement plans from logical_count statistics; "
+                "Coupled EvenMoE placement plans from logical_count statistics; "
                 "a physical_to_logical_map carries no routing metadata."
             )
         logger.info(
@@ -849,7 +849,7 @@ def compute_initial_expert_location_metadata(
     elif "logical_count" in data_dict:
         if coupled and data_dict.get("logical_count_layout") != "rank_layer_expert":
             raise ValueError(
-                "Coupled MLB placement needs statistics recorded per source EP rank "
+                "Coupled EvenMoE placement needs statistics recorded per source EP rank "
                 "(logical_count_layout='rank_layer_expert'); record them with the "
                 "same --moe-load-balancer-algorithm."
             )
@@ -880,11 +880,11 @@ def _init_coupled_bootstrap(model_config: ModelConfig, moe_ep_rank: int):
     num_redundant_per_rank = get_exec().moe.ep_num_redundant_experts // ep_size
     if ep_size <= 1 or num_logical_experts % ep_size != 0:
         raise ValueError(
-            "Coupled MLB placement requires ep_size > 1 dividing the expert count."
+            "Coupled EvenMoE placement requires ep_size > 1 dividing the expert count."
         )
     if num_redundant_per_rank <= 0:
         raise ValueError(
-            "Coupled MLB placement requires a redundant slot on every rank."
+            "Coupled EvenMoE placement requires a redundant slot on every rank."
         )
     masters = torch.arange(num_logical_experts, dtype=torch.int32).reshape(ep_size, -1)
     redundant = masters[:, torch.arange(num_redundant_per_rank) % masters.shape[1]]

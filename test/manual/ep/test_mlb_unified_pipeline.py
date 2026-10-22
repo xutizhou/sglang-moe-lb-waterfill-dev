@@ -13,8 +13,8 @@ from unittest.mock import patch
 
 import torch
 import torch.distributed as dist
-from moe_load_balancer import MoELoadBalancer
-from moe_load_balancer.adapters.sglang import (
+from evenmoe import MoELoadBalancer
+from evenmoe.adapters.sglang import (
     commit_placement,
     to_load_balancer_kwargs,
     to_placement_request,

@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 
-pytest.importorskip("moe_load_balancer")
+pytest.importorskip("evenmoe")
 
 from sglang.srt.eplb.expert_location import ExpertLocationMetadata
 from sglang.srt.runtime_context import get_context
@@ -35,7 +35,7 @@ def metadata(quota, layers=(0, 1)):
 
 
 def test_partial_commit_keeps_other_layer_quota():
-    from moe_load_balancer.adapters.sglang import to_placement_snapshot
+    from evenmoe.adapters.sglang import to_placement_snapshot
 
     old = [torch.tensor([[1, 2], [1, 2]]) for _ in range(2)]
     new = [torch.tensor([[3, 4], [3, 4]]) for _ in range(2)]
@@ -110,8 +110,8 @@ def test_routing_glue_refreshes_placement_before_routing():
             ),
             expert_distribution_recorder=Mock(),
         ),
-        patch("moe_load_balancer.adapters.sglang.to_routing_request"),
-        patch("moe_load_balancer.adapters.sglang.to_sglang_routing_output"),
+        patch("evenmoe.adapters.sglang.to_routing_request"),
+        patch("evenmoe.adapters.sglang.to_sglang_routing_output"),
     ):
         route_topk_with_mlb(
             moe_load_balancer=mlb,
@@ -126,7 +126,7 @@ def test_routing_glue_refreshes_placement_before_routing():
 
 @pytest.mark.parametrize("empty", [False, True])
 def test_current_batch_refresh_includes_idle_rank_and_commits_before_routing(empty):
-    from moe_load_balancer.policies.l1 import RefreshGate
+    from evenmoe.policies.l1 import RefreshGate
 
     from sglang.srt.eplb.eplb_manager import EPLBManager
 
@@ -301,7 +301,7 @@ def test_source_counts_are_gathered_before_dispatch_even_on_deepep_auto():
     ],
 )
 def test_offline_placement_rejects_missing_rank_statistics(data, message):
-    from moe_load_balancer import MoELoadBalancer
+    from evenmoe import MoELoadBalancer
 
     from sglang.srt.eplb.expert_location import compute_initial_expert_location_metadata
 
@@ -316,7 +316,7 @@ def test_offline_placement_rejects_missing_rank_statistics(data, message):
 
 
 def test_coupled_bootstrap_places_masters_before_rank_local_redundant_slots():
-    from moe_load_balancer import MoELoadBalancer
+    from evenmoe import MoELoadBalancer
 
     from sglang.srt.eplb.expert_location import compute_initial_expert_location_metadata
 

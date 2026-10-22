@@ -1008,7 +1008,7 @@ class _DetailAccumulator(_UtilizationRateAccumulatorMixin):
 
 
 def _placement_is_coupled() -> bool:
-    """Whether the MLB routing expression names the L1 policy owning placement.
+    """Whether the EvenMoE routing expression names the L1 policy owning placement.
 
     Such a policy plans from live traffic one layer at a time and consumes the
     statistics per source EP rank, so the recorder keeps the rank dimension.

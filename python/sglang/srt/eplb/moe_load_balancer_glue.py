@@ -1,4 +1,12 @@
-"""SGLang-owned glue for the framework-neutral MoE load balancer."""
+"""SGLang-owned glue for EvenMoE, the framework-neutral MoE load balancer.
+
+EvenMoE (https://github.com/ai-dynamo/evenmoe, import name ``evenmoe``) owns
+the algorithms (L1 expert placement: EPLB variants, UltraEP; L2 replica
+routing: static, LPLB, Waterfill, UltraEP). SGLang stays the authority over
+the committed expert placement and the collectives; this module translates
+between the two. Everything here is a no-op unless
+``--moe-load-balancer-algorithm`` is set, and ``evenmoe`` is only imported then.
+"""
 
 from __future__ import annotations
 
@@ -42,7 +50,7 @@ def route_topk_with_mlb(
     routed-experts capture.
     """
 
-    from moe_load_balancer.adapters.sglang import (
+    from evenmoe.adapters.sglang import (
         to_routing_request,
         to_sglang_routing_output,
     )
@@ -100,8 +108,15 @@ def _current_stage() -> Optional[str]:
 
 
 def get_moe_load_balancer_pipeline(algorithm):
+    """Parse ``--moe-load-balancer-algorithm`` into an EvenMoE RoutingPipeline."""
     if algorithm is None:
         return None
-    from moe_load_balancer import RoutingPipeline
+    try:
+        from evenmoe import RoutingPipeline
+    except ImportError as error:
+        raise ImportError(
+            "--moe-load-balancer-algorithm requires the evenmoe package "
+            "(https://github.com/ai-dynamo/evenmoe)."
+        ) from error
 
     return RoutingPipeline.from_value(algorithm)

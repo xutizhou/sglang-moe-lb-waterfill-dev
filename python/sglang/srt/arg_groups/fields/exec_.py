@@ -883,7 +883,9 @@ class ExecMoe(msgspec.Struct):
     moe_load_balancer_algorithm: A[
         Optional[str],
         Arg(
-            help="MLB routing algorithm or a composed pipeline, e.g. lplb+waterfill.",
+            help="EvenMoE expert routing pipeline for redundant experts (static, "
+            "lplb, waterfill, ultraep, or a composition such as lplb+waterfill). "
+            "Requires the evenmoe package.",
             resolvable=True,
         ),
     ] = None

@@ -754,8 +754,8 @@ class ModelRunner:
         if server_args.moe_load_balancer_algorithm is None:
             return None
 
-        from moe_load_balancer import MoELoadBalancer
-        from moe_load_balancer.adapters.sglang import to_load_balancer_kwargs
+        from evenmoe import MoELoadBalancer
+        from evenmoe.adapters.sglang import to_load_balancer_kwargs
 
         context = get_context()
         model_info = ModelConfigForExpertLocation.from_model_config(self.model_config)
@@ -782,11 +782,11 @@ class ModelRunner:
                 continue
             if module.layer_id is None:
                 raise RuntimeError(
-                    "MLB routing requires every MoE TopK to have layer_id."
+                    "EvenMoE routing requires every MoE TopK to have layer_id."
                 )
             module.moe_load_balancer = self.moe_load_balancer
             layer_ids.append(module.layer_id)
-        from moe_load_balancer.adapters.sglang import commit_placement
+        from evenmoe.adapters.sglang import commit_placement
 
         commit_placement(self.moe_load_balancer, get_context(), layer_ids)
 

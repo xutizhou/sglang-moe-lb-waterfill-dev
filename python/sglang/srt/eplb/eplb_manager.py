@@ -65,7 +65,7 @@ class EPLBManager:
         self._refresh_gate = None
         self._forward_batch = None
         if self.refreshes_per_layer:
-            from moe_load_balancer.policies.l1 import RefreshGate
+            from evenmoe.policies.l1 import RefreshGate
 
             self._refresh_gate = RefreshGate(self._rebalance_num_iterations)
 
@@ -128,12 +128,12 @@ class EPLBManager:
         ):
             return
 
-        from moe_load_balancer.adapters.sglang import (
+        from evenmoe.adapters.sglang import (
             commit_placement,
             to_placement_request,
             to_sglang_maps,
         )
-        from moe_load_balancer.kernels.ops.counting import count_logical_experts
+        from evenmoe.kernels.ops.counting import count_logical_experts
 
         live = get_global_expert_location_metadata()
         local_count = count_logical_experts(
@@ -237,7 +237,7 @@ class EPLBManager:
 
         on_placement_committed = None
         if self._moe_load_balancer is not None:
-            from moe_load_balancer.adapters.sglang import commit_placement
+            from evenmoe.adapters.sglang import commit_placement
 
             on_placement_committed = partial(
                 commit_placement, self._moe_load_balancer, get_context()

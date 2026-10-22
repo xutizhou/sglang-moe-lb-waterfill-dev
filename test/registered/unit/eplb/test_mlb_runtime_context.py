@@ -21,12 +21,12 @@ register_cpu_ci(est_time=1, suite="base-a-test-cpu")
 
 class TestMLBRuntimeContext(unittest.TestCase):
     @unittest.skipUnless(
-        importlib.util.find_spec("moe_load_balancer"),
-        "moe_load_balancer is not installed",
+        importlib.util.find_spec("evenmoe"),
+        "evenmoe is not installed",
     )
     def test_bootstrap_uses_runtime_context_before_metadata_exists(self):
-        from moe_load_balancer import MoELoadBalancer
-        from moe_load_balancer.adapters.sglang import to_load_balancer_kwargs
+        from evenmoe import MoELoadBalancer
+        from evenmoe.adapters.sglang import to_load_balancer_kwargs
 
         from sglang.srt.model_executor.model_runner import ModelRunner
 
@@ -68,11 +68,11 @@ class TestMLBRuntimeContext(unittest.TestCase):
             extract.assert_called_once_with(model_config)
 
     @unittest.skipUnless(
-        importlib.util.find_spec("moe_load_balancer"),
-        "moe_load_balancer is not installed",
+        importlib.util.find_spec("evenmoe"),
+        "evenmoe is not installed",
     )
     def test_context_layout_matches_sglang_initial_geometry(self):
-        from moe_load_balancer.adapters.sglang.placement import _expert_layout
+        from evenmoe.adapters.sglang.placement import _expert_layout
 
         context = get_context()
         cases = [
@@ -110,8 +110,8 @@ class TestMLBRuntimeContext(unittest.TestCase):
                 self.assertIsNone(actual["num_groups"])
 
     @unittest.skipUnless(
-        importlib.util.find_spec("moe_load_balancer"),
-        "moe_load_balancer is not installed",
+        importlib.util.find_spec("evenmoe"),
+        "evenmoe is not installed",
     )
     def test_model_runner_creates_core_through_context_adapter(self):
         from sglang.srt.model_executor.model_runner import ModelRunner
@@ -136,11 +136,11 @@ class TestMLBRuntimeContext(unittest.TestCase):
                 ),
             ),
             patch(
-                "moe_load_balancer.adapters.sglang.to_load_balancer_kwargs",
+                "evenmoe.adapters.sglang.to_load_balancer_kwargs",
                 return_value=kwargs,
             ) as adapt,
             patch(
-                "moe_load_balancer.MoELoadBalancer.from_algorithm",
+                "evenmoe.MoELoadBalancer.from_algorithm",
                 return_value=mlb,
             ) as create,
         ):
@@ -153,12 +153,12 @@ class TestMLBRuntimeContext(unittest.TestCase):
         create.assert_called_once_with(**kwargs)
 
     @unittest.skipUnless(
-        importlib.util.find_spec("moe_load_balancer"),
-        "moe_load_balancer is not installed",
+        importlib.util.find_spec("evenmoe"),
+        "evenmoe is not installed",
     )
     def test_placement_planning_uses_context_adapter(self):
         import torch
-        from moe_load_balancer import MoELoadBalancer
+        from evenmoe import MoELoadBalancer
 
         module = "sglang.srt.eplb.expert_location"
         mlb = Mock(spec=MoELoadBalancer)
@@ -186,11 +186,11 @@ class TestMLBRuntimeContext(unittest.TestCase):
                 return_value=None,
             ),
             patch(
-                "moe_load_balancer.adapters.sglang.to_placement_request",
+                "evenmoe.adapters.sglang.to_placement_request",
                 return_value=request,
             ) as adapt_request,
             patch(
-                "moe_load_balancer.adapters.sglang.to_sglang_maps", return_value=maps
+                "evenmoe.adapters.sglang.to_sglang_maps", return_value=maps
             ) as adapt_result,
         ):
             result = ExpertLocationMetadata.init_by_eplb(
@@ -211,8 +211,8 @@ class TestMLBRuntimeContext(unittest.TestCase):
         )
 
     @unittest.skipUnless(
-        importlib.util.find_spec("moe_load_balancer"),
-        "moe_load_balancer is not installed",
+        importlib.util.find_spec("evenmoe"),
+        "evenmoe is not installed",
     )
     def test_topk_modules_share_the_load_balancer_and_commit_their_layers(self):
         from sglang.srt.layers.moe.hash_topk import HashTopK
@@ -232,7 +232,7 @@ class TestMLBRuntimeContext(unittest.TestCase):
                 "sglang.srt.model_executor.model_runner.get_context",
                 return_value=context,
             ),
-            patch("moe_load_balancer.adapters.sglang.commit_placement") as commit,
+            patch("evenmoe.adapters.sglang.commit_placement") as commit,
         ):
             ModelRunner._prepare_moe_topk(runner)
         self.assertIs(topk.moe_load_balancer, mlb)
@@ -240,8 +240,8 @@ class TestMLBRuntimeContext(unittest.TestCase):
         commit.assert_called_once_with(mlb, context, [2, 3])
 
     @unittest.skipUnless(
-        importlib.util.find_spec("moe_load_balancer"),
-        "moe_load_balancer is not installed",
+        importlib.util.find_spec("evenmoe"),
+        "evenmoe is not installed",
     )
     def test_rebalance_commits_each_chunk_to_the_same_load_balancer(self):
         order = []
@@ -267,7 +267,7 @@ class TestMLBRuntimeContext(unittest.TestCase):
         module = "sglang.srt.eplb.eplb_manager"
         with (
             patch(
-                "moe_load_balancer.adapters.sglang.commit_placement",
+                "evenmoe.adapters.sglang.commit_placement",
                 side_effect=lambda core, context, ids: order.append(("commit", ids)),
             ) as commit,
             patch(f"{module}.ElasticEPStateManager.instance", return_value=None),
@@ -290,8 +290,8 @@ class TestMLBRuntimeContext(unittest.TestCase):
         self.assertTrue(all(call.args[0] is mlb for call in commit.call_args_list))
 
     @unittest.skipUnless(
-        importlib.util.find_spec("moe_load_balancer"),
-        "moe_load_balancer is not installed",
+        importlib.util.find_spec("evenmoe"),
+        "evenmoe is not installed",
     )
     def test_glue_routes_once_and_records_current_resources(self):
         from sglang.srt.eplb import moe_load_balancer_glue as glue
@@ -317,11 +317,11 @@ class TestMLBRuntimeContext(unittest.TestCase):
         with (
             patch.object(glue, "get_context", return_value=context),
             patch(
-                "moe_load_balancer.adapters.sglang.to_routing_request",
+                "evenmoe.adapters.sglang.to_routing_request",
                 return_value=request,
             ) as adapt_request,
             patch(
-                "moe_load_balancer.adapters.sglang.to_sglang_routing_output",
+                "evenmoe.adapters.sglang.to_sglang_routing_output",
                 return_value=output,
             ) as adapt_result,
         ):
@@ -360,18 +360,18 @@ class TestMLBRuntimeContext(unittest.TestCase):
         self.assertIs(result.router_logits, output.router_logits)
 
     @unittest.skipUnless(
-        importlib.util.find_spec("moe_load_balancer"),
-        "moe_load_balancer is not installed",
+        importlib.util.find_spec("evenmoe"),
+        "evenmoe is not installed",
     )
     def test_commit_reads_current_resources_and_notifies_each_layer(self):
-        from moe_load_balancer.adapters.sglang import commit_placement
+        from evenmoe.adapters.sglang import commit_placement
 
         mlb = Mock()
         context = SimpleNamespace(
             resources=SimpleNamespace(expert_location_metadata=object())
         )
         with patch(
-            "moe_load_balancer.adapters.sglang.placement.to_placement_snapshot",
+            "evenmoe.adapters.sglang.placement.to_placement_snapshot",
             side_effect=lambda metadata, layer_id: SimpleNamespace(
                 metadata=metadata, layer_id=layer_id
             ),
@@ -397,11 +397,11 @@ class TestMLBRuntimeContext(unittest.TestCase):
             )
 
     @unittest.skipUnless(
-        importlib.util.find_spec("moe_load_balancer"),
-        "moe_load_balancer is not installed",
+        importlib.util.find_spec("evenmoe"),
+        "evenmoe is not installed",
     )
     def test_commit_skips_policies_without_placement_state(self):
-        from moe_load_balancer.adapters.sglang import commit_placement
+        from evenmoe.adapters.sglang import commit_placement
 
         mlb = Mock()
         mlb.routing_capabilities.requires_placement_state = False
@@ -409,11 +409,11 @@ class TestMLBRuntimeContext(unittest.TestCase):
         mlb.on_placement_committed.assert_not_called()
 
     @unittest.skipUnless(
-        importlib.util.find_spec("moe_load_balancer"),
-        "moe_load_balancer is not installed",
+        importlib.util.find_spec("evenmoe"),
+        "evenmoe is not installed",
     )
     def test_commit_rejects_missing_metadata_before_notifying_core(self):
-        from moe_load_balancer.adapters.sglang import commit_placement
+        from evenmoe.adapters.sglang import commit_placement
 
         mlb = Mock()
         context = SimpleNamespace(

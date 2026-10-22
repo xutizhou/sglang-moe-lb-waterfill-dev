@@ -50,7 +50,7 @@ def handle_moe_load_balancer(server_args: Any):
         and cfg.ep_dispatch_algorithm is None
         and (cfg.enable_eplb or cfg.init_expert_location != "trivial")
     ):
-        from moe_load_balancer import RoutingPipeline
+        from evenmoe import RoutingPipeline
 
         algorithm = RoutingPipeline.default_replica_routing().name
     pipeline = get_moe_load_balancer_pipeline(algorithm)
@@ -72,7 +72,7 @@ def handle_moe_load_balancer(server_args: Any):
 
 def _check_coupled_placement(cfg: Any, pipeline: Any) -> None:
     """A coupled placement policy re-plans layers online from live traffic."""
-    from moe_load_balancer import ExpertDeploymentConfig
+    from evenmoe import ExpertDeploymentConfig
 
     reason = pipeline.is_applicable(
         ExpertDeploymentConfig(
@@ -85,24 +85,26 @@ def _check_coupled_placement(cfg: Any, pipeline: Any) -> None:
         raise ValueError(reason)
     if cfg.ep_size <= 1 or cfg.ep_num_redundant_experts % cfg.ep_size:
         raise ValueError(
-            "Coupled MLB placement requires redundant slots on every EP rank."
+            "Coupled EvenMoE placement requires redundant slots on every EP rank."
         )
     if cfg.elastic_ep_backend is not None or cfg.pp_size != 1:
-        raise ValueError("Coupled MLB placement requires a fixed EP group and PP=1.")
+        raise ValueError(
+            "Coupled EvenMoE placement requires a fixed EP group and PP=1."
+        )
     if not cfg.enable_eplb and cfg.init_expert_location == "trivial":
         raise ValueError(
-            "Coupled MLB placement requires --enable-eplb or recorded placement statistics."
+            "Coupled EvenMoE placement requires --enable-eplb or recorded placement statistics."
         )
     if cfg.enable_eplb and not cfg.disable_cuda_graph:
         raise ValueError(
-            "Online coupled MLB placement currently requires --disable-cuda-graph."
+            "Online coupled EvenMoE placement currently requires --disable-cuda-graph."
         )
     if cfg.enable_two_batch_overlap or cfg.enable_single_batch_overlap:
         raise ValueError(
-            "Coupled MLB placement does not support overlapping microbatches."
+            "Coupled EvenMoE placement does not support overlapping microbatches."
         )
     if cfg.expert_distribution_recorder_mode not in (None, "stat"):
-        raise ValueError("Coupled MLB placement requires the stat expert recorder.")
+        raise ValueError("Coupled EvenMoE placement requires the stat expert recorder.")
 
 
 def _flashinfer_a2a_topology_is_supported(
