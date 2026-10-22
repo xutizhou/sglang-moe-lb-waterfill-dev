@@ -24,7 +24,7 @@ from sglang.srt.layers.moe.topk import (
     resolve_routing_inputs,
 )
 from sglang.srt.layers.moe.utils import has_per_rank_fused_shared_slots
-from sglang.srt.runtime_context import get_exec, get_flags, get_model
+from sglang.srt.runtime_context import get_flags, get_model
 from sglang.srt.utils import is_hip, is_npu, is_xpu
 
 logger = logging.getLogger(__name__)
@@ -54,12 +54,10 @@ class HashTopK(nn.Module):
         )
         # See TopK: the MoE load balancer routes after TopK on target layers.
         from sglang.srt.eplb.moe_load_balancer_glue import (
-            get_moe_load_balancer_pipeline,
+            get_configured_moe_load_balancer_pipeline,
         )
 
-        pipeline = get_moe_load_balancer_pipeline(
-            get_exec().moe.moe_load_balancer_algorithm
-        )
+        pipeline = get_configured_moe_load_balancer_pipeline()
         self.mlb_requires_post_topk_routing = (
             pipeline is not None
             and pipeline.capabilities.requires_post_topk_routing

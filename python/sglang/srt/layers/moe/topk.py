@@ -717,12 +717,10 @@ class TopK(BaseFusedOp):
         # the shared MoELoadBalancer to every target TopK before the first
         # forward. Draft layers keep the native path.
         from sglang.srt.eplb.moe_load_balancer_glue import (
-            get_moe_load_balancer_pipeline,
+            get_configured_moe_load_balancer_pipeline,
         )
 
-        pipeline = get_moe_load_balancer_pipeline(
-            get_exec().moe.moe_load_balancer_algorithm
-        )
+        pipeline = get_configured_moe_load_balancer_pipeline()
         self.mlb_requires_post_topk_routing = (
             pipeline is not None
             and pipeline.capabilities.requires_post_topk_routing

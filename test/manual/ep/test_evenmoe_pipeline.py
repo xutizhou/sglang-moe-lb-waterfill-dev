@@ -1,7 +1,7 @@
-"""Two-rank H20 smoke for the unified MLB EPLB/LPLB/Waterfill pipeline.
+"""Two-rank smoke for the EvenMoE EPLB/LPLB/Waterfill pipeline in SGLang.
 
 Run one process per GPU with ``RANK``, ``WORLD_SIZE``, ``MASTER_ADDR`` and
-``MASTER_PORT`` set. This test uses real NCCL and real MLB Triton policies,
+``MASTER_PORT`` set. This test uses real NCCL and real EvenMoE Triton policies,
 with a small explicit context fixture for SGLang-owned resources.
 """
 

@@ -603,11 +603,11 @@ def resolve_shared_experts_config(
         num_fused = 0
     else:
         num_fused = count_fusable(hf_config)
-    from sglang.srt.eplb.moe_load_balancer_glue import get_moe_load_balancer_pipeline
-
-    pipeline = get_moe_load_balancer_pipeline(
-        get_exec().moe.moe_load_balancer_algorithm
+    from sglang.srt.eplb.moe_load_balancer_glue import (
+        get_configured_moe_load_balancer_pipeline,
     )
+
+    pipeline = get_configured_moe_load_balancer_pipeline()
     routes_shared = pipeline is not None and pipeline.capabilities.routes_shared_expert
     return SharedExpertsConfig(
         fusion_disabled=disabled,

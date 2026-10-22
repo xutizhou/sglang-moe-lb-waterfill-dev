@@ -1,9 +1,11 @@
 import argparse
+import importlib.util
 import json
 import os
 import pickle
 import shutil
 import socket
+import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -1994,6 +1996,25 @@ class TestFlashinferMegaMoeConfig(CustomTestCase):
 
 
 class TestMoELoadBalancerAlgorithm(unittest.TestCase):
+    def test_native_eplb_path_does_not_import_evenmoe(self):
+        server_args = ServerArgs(model_path="dummy", enable_eplb=True, ep_size=2)
+        with patch.dict(sys.modules, {"evenmoe": None}):
+            handle_moe_load_balancer(server_args)
+        self.assertIsNone(resolution_result(server_args, "moe_load_balancer_algorithm"))
+
+    def test_flag_without_evenmoe_installed_is_a_clear_error(self):
+        server_args = ServerArgs(
+            model_path="dummy", moe_load_balancer_algorithm="static"
+        )
+        with (
+            patch.dict(sys.modules, {"evenmoe": None}),
+            self.assertRaisesRegex(ImportError, "evenmoe"),
+        ):
+            handle_moe_load_balancer(server_args)
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("evenmoe"), "evenmoe is not installed"
+    )
     def test_one_parameter_selects_composed_pipeline(self):
         server_args = ServerArgs(
             model_path="dummy",
@@ -2012,7 +2033,10 @@ class TestMoELoadBalancerAlgorithm(unittest.TestCase):
         self.assertTrue(capabilities.requires_placement_state)
         self.assertTrue(capabilities.routes_shared_expert)
 
-    def test_bare_waterfill_gets_default_replica_routing_from_mlb(self):
+    @unittest.skipUnless(
+        importlib.util.find_spec("evenmoe"), "evenmoe is not installed"
+    )
+    def test_bare_waterfill_gets_default_replica_routing(self):
         server_args = ServerArgs(
             model_path="dummy",
             moe_load_balancer_algorithm="waterfill",
@@ -2028,19 +2052,6 @@ class TestMoELoadBalancerAlgorithm(unittest.TestCase):
             resolution_result(server_args, "moe_load_balancer_algorithm")
         ).capabilities
         self.assertTrue(capabilities.requires_rank_dispatch_map)
-
-    def test_eplb_default_replica_routing_comes_from_mlb(self):
-        server_args = ServerArgs(
-            model_path="dummy",
-            enable_eplb=True,
-            ep_size=2,
-        )
-
-        handle_moe_load_balancer(server_args)
-
-        self.assertEqual(
-            resolution_result(server_args, "moe_load_balancer_algorithm"), "static"
-        )
 
 
 class TestPortArgs(unittest.TestCase):

@@ -1,4 +1,4 @@
-"""MLB bootstrap and placement commit integration with RuntimeContext."""
+"""EvenMoE bootstrap and placement commit integration with RuntimeContext."""
 
 import importlib.util
 import unittest
@@ -19,7 +19,7 @@ from sglang.test.ci.ci_register import register_cpu_ci
 register_cpu_ci(est_time=1, suite="base-a-test-cpu")
 
 
-class TestMLBRuntimeContext(unittest.TestCase):
+class TestEvenMoERuntimeContext(unittest.TestCase):
     @unittest.skipUnless(
         importlib.util.find_spec("evenmoe"),
         "evenmoe is not installed",
@@ -49,7 +49,9 @@ class TestMLBRuntimeContext(unittest.TestCase):
             patch.object(
                 ExpertLocationMetadata,
                 "_init_common",
-                side_effect=AssertionError("MLB must not call SGLang's layout helper"),
+                side_effect=AssertionError(
+                    "EvenMoE must not call SGLang's layout helper"
+                ),
             ),
         ):
             self.assertIsNone(context.resources.expert_location_metadata)

@@ -18,7 +18,7 @@ from sglang.srt.model_executor.forward_context import (
     get_forward_context,
     has_forward_context,
 )
-from sglang.srt.runtime_context import get_context
+from sglang.srt.runtime_context import get_context, get_exec
 
 _FORWARD_MODE_TO_STAGE = {
     "EXTEND": "prefill",
@@ -105,6 +105,11 @@ def _current_stage() -> Optional[str]:
         return None
     name = getattr(forward_mode, "name", None) or str(forward_mode).upper()
     return _FORWARD_MODE_TO_STAGE.get(name)
+
+
+def get_configured_moe_load_balancer_pipeline():
+    """The server's ``--moe-load-balancer-algorithm`` pipeline, or None."""
+    return get_moe_load_balancer_pipeline(get_exec().moe.moe_load_balancer_algorithm)
 
 
 def get_moe_load_balancer_pipeline(algorithm):

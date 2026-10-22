@@ -41,19 +41,15 @@ logger = logging.getLogger(__name__)
 
 
 def handle_moe_load_balancer(server_args: Any):
+    """Resolve ``--moe-load-balancer-algorithm`` (EvenMoE) when it is set.
+
+    EvenMoE is strictly opt-in: without the flag the native EPLB dispatch and
+    Waterfill paths are untouched and ``evenmoe`` is never imported.
+    """
     cfg = resolving_view(server_args)
     from sglang.srt.eplb.moe_load_balancer_glue import get_moe_load_balancer_pipeline
 
-    algorithm = cfg.moe_load_balancer_algorithm
-    if (
-        algorithm is None
-        and cfg.ep_dispatch_algorithm is None
-        and (cfg.enable_eplb or cfg.init_expert_location != "trivial")
-    ):
-        from evenmoe import RoutingPipeline
-
-        algorithm = RoutingPipeline.default_replica_routing().name
-    pipeline = get_moe_load_balancer_pipeline(algorithm)
+    pipeline = get_moe_load_balancer_pipeline(cfg.moe_load_balancer_algorithm)
     if pipeline is not None:
         if cfg.ep_dispatch_algorithm is not None or cfg.enable_waterfill:
             raise ValueError(

@@ -1013,11 +1013,11 @@ def _placement_is_coupled() -> bool:
     Such a policy plans from live traffic one layer at a time and consumes the
     statistics per source EP rank, so the recorder keeps the rank dimension.
     """
-    from sglang.srt.eplb.moe_load_balancer_glue import get_moe_load_balancer_pipeline
-
-    pipeline = get_moe_load_balancer_pipeline(
-        get_exec().moe.moe_load_balancer_algorithm
+    from sglang.srt.eplb.moe_load_balancer_glue import (
+        get_configured_moe_load_balancer_pipeline,
     )
+
+    pipeline = get_configured_moe_load_balancer_pipeline()
     return pipeline is not None and pipeline.placement_policy is not None
 
 

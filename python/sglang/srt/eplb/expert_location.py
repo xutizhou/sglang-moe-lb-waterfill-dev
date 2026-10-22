@@ -895,9 +895,9 @@ def _init_coupled_bootstrap(model_config: ModelConfig, moe_ep_rank: int):
 
 
 def _mlb_requires_dispatch_map():
-    from sglang.srt.eplb.moe_load_balancer_glue import get_moe_load_balancer_pipeline
-
-    pipeline = get_moe_load_balancer_pipeline(
-        get_exec().moe.moe_load_balancer_algorithm
+    from sglang.srt.eplb.moe_load_balancer_glue import (
+        get_configured_moe_load_balancer_pipeline,
     )
+
+    pipeline = get_configured_moe_load_balancer_pipeline()
     return pipeline is not None and pipeline.capabilities.requires_rank_dispatch_map
