@@ -93,7 +93,7 @@ def forward_context(
         ctx = replace(
             ctx,
             moe_num_token_non_padded=forward_batch.moe_num_token_non_padded,
-            forward_mode=forward_batch.forward_mode,
+            forward_mode=getattr(forward_batch, "forward_mode", None),
         )
     elif ctx.moe_num_token_non_padded is None and _current is not None:
         ctx = replace(
