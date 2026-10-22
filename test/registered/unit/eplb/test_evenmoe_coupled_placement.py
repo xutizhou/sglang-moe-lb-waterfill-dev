@@ -5,13 +5,17 @@ from sglang.test.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=2, suite="base-a-test-cpu")
 
+import importlib.util
+import sys
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
 import torch
 
-pytest.importorskip("evenmoe")
+pytestmark = pytest.mark.skipif(
+    importlib.util.find_spec("evenmoe") is None, reason="evenmoe is not installed"
+)
 
 from sglang.srt.eplb.expert_location import ExpertLocationMetadata
 from sglang.srt.runtime_context import get_context
@@ -383,3 +387,7 @@ def test_unsupported_coupled_configuration_fails_early(overrides, message):
     ):
         with pytest.raises(ValueError, match=message):
             handle_moe_load_balancer(object())
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__, "-v"]))
