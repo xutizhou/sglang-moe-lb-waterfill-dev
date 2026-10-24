@@ -96,13 +96,12 @@ class EPLBManager:
         if not self.refreshes_per_layer:
             next(self._main_generator)
 
-    def refresh_layer(self, layer_id, logical_topk_ids, forward_batch=None):
+    def refresh_layer(self, layer_id, logical_topk_ids):
         """Re-plan one layer from its current TopK and commit weights + placement
         before that layer dispatches. Every EP rank must take the same branch:
         the gate, the gather and the weight move are collectives."""
-        if forward_batch is None:
-            # Model code that calls TopK without the batch; the runner saw it.
-            forward_batch = self._forward_batch
+        # TopK does not see the batch; ModelRunner.forward published it.
+        forward_batch = self._forward_batch
         if (
             forward_batch is None
             or self._rebalance_disabled_reason is not None

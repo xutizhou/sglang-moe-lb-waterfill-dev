@@ -1168,7 +1168,7 @@ class TopK(BaseFusedOp):
             self.topk_config.top_k <= 8 and router_logits.shape[1] <= 256
         )
 
-        return select_experts(
+        topk_output = select_experts(
             hidden_states=hidden_states,
             layer_id=self.layer_id,
             router_logits=router_logits,
@@ -1176,6 +1176,14 @@ class TopK(BaseFusedOp):
             num_token_non_padded=num_token_non_padded,
             expert_location_dispatch_info=expert_location_dispatch_info,
             dynamic_expert_bias=dynamic_expert_bias,
+            moe_load_balancer=self.moe_load_balancer,
+        )
+        if self.moe_load_balancer is None:
+            return topk_output
+        return self._apply_moe_load_balancer(
+            topk_output,
+            hidden_states.shape[0],
+            num_token_non_padded=num_token_non_padded,
         )
 
 

@@ -754,19 +754,21 @@ class ModelRunner:
         if server_args.moe_load_balancer_algorithm is None:
             return None
 
+        model_info = ModelConfigForExpertLocation.from_model_config(self.model_config)
+        if model_info is None:
+            raise ValueError(
+                "--moe-load-balancer-algorithm requires a model with routed "
+                f"experts; {self.model_config.hf_config.architectures} has none."
+            )
+
         from evenmoe import MoELoadBalancer
         from evenmoe.adapters.sglang import to_load_balancer_kwargs
 
         context = get_context()
-        model_info = ModelConfigForExpertLocation.from_model_config(self.model_config)
-        context.resources.mlb_model_info = (
-            {
-                "num_logical_experts": model_info.num_logical_experts,
-                "num_groups": model_info.num_groups,
-            }
-            if model_info is not None
-            else None
-        )
+        context.resources.mlb_model_info = {
+            "num_logical_experts": model_info.num_logical_experts,
+            "num_groups": model_info.num_groups,
+        }
         kwargs = to_load_balancer_kwargs(context)
         return MoELoadBalancer.from_algorithm(**kwargs)
 

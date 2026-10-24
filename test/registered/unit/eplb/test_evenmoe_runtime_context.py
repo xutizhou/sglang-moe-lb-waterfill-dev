@@ -112,6 +112,28 @@ class TestEvenMoERuntimeContext(unittest.TestCase):
                     self.assertEqual(actual[field], expected[field])
                 self.assertIsNone(actual["num_groups"])
 
+    def test_model_runner_rejects_models_without_routed_experts(self):
+        from sglang.srt.model_executor.model_runner import ModelRunner
+
+        model_config = SimpleNamespace(
+            hf_config=SimpleNamespace(architectures=["LlamaForCausalLM"])
+        )
+        with (
+            patch.object(
+                ModelConfigForExpertLocation, "from_model_config", return_value=None
+            ),
+            patch(
+                "sglang.srt.model_executor.model_runner.get_exec",
+                return_value=SimpleNamespace(
+                    moe=SimpleNamespace(moe_load_balancer_algorithm="static")
+                ),
+            ),
+            self.assertRaisesRegex(ValueError, "routed experts"),
+        ):
+            ModelRunner._create_moe_load_balancer(
+                SimpleNamespace(is_draft_worker=False, model_config=model_config)
+            )
+
     @unittest.skipUnless(
         importlib.util.find_spec("evenmoe"),
         "evenmoe is not installed",

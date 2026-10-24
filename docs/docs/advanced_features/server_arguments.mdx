@@ -473,6 +473,18 @@ Please consult the documentation below and [server_args.py](https://github.com/s
       <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.05)"}}>Type: int</td>
     </tr>
         <tr>
+      <td style={{padding: "9px 12px", fontWeight: 500, backgroundColor: "rgba(255,255,255,0.02)"}}>`--prefill-decode-interval`</td>
+      <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.05)"}}>The number of decode rounds to run after a prefill batch before scheduling the next prefill. By default, this is disabled except for profiled Qwen3-VL serving configurations on Hopper. In data-parallel attention mode, the interval is synchronized across all DP ranks. Set to 0 to disable.</td>
+      <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.02)"}}>`None`</td>
+      <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.05)"}}>Type: int</td>
+    </tr>
+        <tr>
+      <td style={{padding: "9px 12px", fontWeight: 500, backgroundColor: "rgba(255,255,255,0.02)"}}>`--prefill-decode-interval-min-bs`</td>
+      <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.05)"}}>Apply `--prefill-decode-interval` only while the running batch holds at least this many requests. Below it, prefill is admitted every round so the batch fills quickly. In data-parallel attention mode, each rank compares its own running batch. Set to 0 to always apply the interval.</td>
+      <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.02)"}}>`0`</td>
+      <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.05)"}}>Type: int</td>
+    </tr>
+        <tr>
       <td style={{padding: "9px 12px", fontWeight: 500, backgroundColor: "rgba(255,255,255,0.02)"}}>`--prefill-max-requests`</td>
       <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.05)"}}>The maximum number of requests in a prefill batch. If not specified, there is no limit.</td>
       <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.02)"}}>`None`</td>
@@ -1878,7 +1890,7 @@ Combining `--enable-response-store` with `--disaggregation-mode=prefill` or `dec
     </tr>
         <tr>
       <td style={{padding: "9px 12px", fontWeight: 500, backgroundColor: "rgba(255,255,255,0.02)"}}>`--moe-load-balancer-algorithm`</td>
-      <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.05)"}}>EvenMoE expert routing pipeline for redundant experts: `static`, `lplb`, `waterfill`, `ultraep`, or a composition such as `lplb+waterfill`. Replaces `--ep-dispatch-algorithm` / `--enable-waterfill` for the selected layers; `waterfill` requires a fused-shared-expert model and DeepEP, `lplb` requires `--ep-num-redundant-experts &gt; 0` with a recorded placement in `--init-expert-location`. Requires the `evenmoe` package.</td>
+      <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.05)"}}>EvenMoE expert routing pipeline for redundant experts: `static`, `lplb`, `waterfill`, `ultraep`, or a composition such as `lplb+waterfill`. Mutually exclusive with `--ep-dispatch-algorithm` and `--enable-waterfill`; `waterfill` requires a fused-shared-expert model and DeepEP, `lplb` requires `--ep-num-redundant-experts &gt; 0` with a recorded placement in `--init-expert-location`. Requires the `evenmoe` package.</td>
       <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.02)"}}><code>None</code></td>
       <td style={{padding: "9px 12px", backgroundColor: "rgba(255,255,255,0.05)"}}>Type: str</td>
     </tr>
