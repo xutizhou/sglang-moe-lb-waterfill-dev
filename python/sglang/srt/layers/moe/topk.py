@@ -2762,7 +2762,8 @@ def _post_process_topk_ids(
                 eplb_map_and_record_fused,
             )
 
-            if get_moe_a2a_backend().is_megamoe():
+            if get_moe_a2a_backend().is_megamoe() and not defer_expert_recording:
+                # The MoE load balancer remaps and records after TopK itself.
                 recorder = get_global_expert_distribution_recorder()
                 load_buffer = recorder.get_current_pass_count_buffer(layer_id)
                 if load_buffer is not None:
